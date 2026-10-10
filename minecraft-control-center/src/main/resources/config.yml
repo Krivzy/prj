@@ -1,0 +1,26 @@
+# MCC runs inside Paper. Keep loopback unless you explicitly configure LAN + HTTPS.
+web:
+  host: 127.0.0.1
+  port: 8080
+  allow-lan: false
+  public-origin: ''
+  secure-cookie: false
+auth:
+  # Legacy compatibility option; shared-password bootstrap is disabled in 0.4.
+  # A fresh database requires the private, single-use .setup-token on loopback.
+  bootstrap-admin: false
+performance:
+  profile: balanced
+modules:
+  chat: true
+  events: true
+  automations: true
+  map: true
+game:
+  max-spawn-count: 128
+  max-active-events: 3
+storage:
+  retention-days: 7
+console:
+  # Exact Minecraft command roots. Namespace syntax, execute, stop/reload and OS commands are blocked.
+  allowed-commands: [list, say, time, weather, difficulty, seed, help, version, plugins]

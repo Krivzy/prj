@@ -1,0 +1,143 @@
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow' version '9.2.2'
+}
+
+group = 'dev.mcc'
+version = '0.4.0'
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://repo.papermc.io/repository/maven-public/' }
+}
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(25) }
+}
+
+dependencies {
+    compileOnly 'io.papermc.paper:paper-api:26.1.2.build.74-stable'
+    implementation 'io.undertow:undertow-core:2.3.20.Final'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.20.1'
+    implementation 'org.xerial:sqlite-jdbc:3.50.3.0'
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.82'
+    testImplementation platform('org.junit:junit-bom:5.13.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'io.papermc.paper:paper-api:26.1.2.build.74-stable'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 25
+    options.compilerArgs += ['-Xlint:deprecation']
+}
+
+def windows = System.getProperty('os.name').toLowerCase().contains('windows')
+def skipFrontend = providers.gradleProperty('skipFrontend').map { it.toBoolean() }.orElse(false)
+def npmCommand = { List<String> arguments ->
+    if (providers.gradleProperty('npmCli').isPresent()) {
+        return [providers.gradleProperty('nodeExecutable').getOrElse('node'), providers.gradleProperty('npmCli').get()] + arguments
+    }
+    def npm = providers.gradleProperty('npmExecutable').getOrElse(windows ? 'npm.cmd' : 'npm')
+    return windows ? ['cmd.exe', '/d', '/c', npm] + arguments : [npm] + arguments
+}
+
+tasks.register('frontendInstall', Exec) {
+    group = 'build'
+    description = 'Install pinned frontend dependencies; Node.js is a build dependency only.'
+    workingDir 'frontend'
+    inputs.files('frontend/package.json', 'frontend/package-lock.json')
+    outputs.file('frontend/node_modules/.package-lock.json')
+    commandLine npmCommand(['ci', '--no-audit', '--no-fund'])
+    onlyIf { !skipFrontend.get() }
+}
+
+tasks.register('frontendBuild', Exec) {
+    group = 'build'
+    description = 'Typecheck and compile static web assets embedded in the plugin JAR.'
+    dependsOn 'frontendInstall'
+    workingDir 'frontend'
+    inputs.files(fileTree('frontend') {
+        exclude 'node_modules/**', 'dist/**', '*.tsbuildinfo'
+    })
+    outputs.dir('frontend/dist')
+    commandLine npmCommand(['run', 'build'])
+    onlyIf { !skipFrontend.get() }
+}
+
+tasks.register('frontendTest', Exec) {
+    group = 'verification'
+    description = 'Verify permissions, action confirmation, API handling and real metric history.'
+    dependsOn 'frontendInstall'
+    workingDir 'frontend'
+    inputs.files(fileTree('frontend/src'), fileTree('frontend/tests'), 'frontend/package.json')
+    commandLine npmCommand(['run', 'test'])
+    onlyIf { !skipFrontend.get() }
+}
+
+tasks.named('processResources') {
+    dependsOn 'frontendBuild'
+    from('frontend/dist') { into 'web' }
+    filesMatching('plugin.yml') { expand(version: project.version) }
+    doFirst {
+        if (!file('frontend/dist/index.html').isFile()) {
+            throw new GradleException('Built frontend is missing. Run frontendBuild, or supply frontend/dist before -PskipFrontend=true.')
+        }
+    }
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+    testLogging { events 'failed', 'skipped'; exceptionFormat = 'full' }
+}
+
+tasks.named('jar') { archiveClassifier = 'unshaded' }
+tasks.named('shadowJar') {
+    archiveFileName = 'MinecraftControlCenter.jar'
+    archiveClassifier = ''
+    mergeServiceFiles()
+    exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'META-INF/INDEX.LIST', 'module-info.class', 'META-INF/versions/**/module-info.class'
+    relocate 'io.undertow', 'dev.mcc.lib.undertow'
+    relocate 'org.xnio', 'dev.mcc.lib.xnio'
+    relocate 'org.jboss', 'dev.mcc.lib.jboss'
+    relocate 'org.wildfly', 'dev.mcc.lib.wildfly'
+    relocate 'io.smallrye.common', 'dev.mcc.lib.smallrye'
+    relocate 'com.fasterxml.jackson', 'dev.mcc.lib.jackson'
+    // SQLite keeps its original package because native JNI entry points depend on it.
+    // Bouncy Castle keeps its package to preserve cryptographic implementation compatibility.
+}
+tasks.named('assemble') { dependsOn 'shadowJar' }
+
+tasks.register('distributionChecksum') {
+    group = 'build'
+    dependsOn 'shadowJar'
+    def artifact = tasks.shadowJar.archiveFile
+    inputs.file(artifact)
+    outputs.file(layout.buildDirectory.file('libs/MinecraftControlCenter.jar.sha256'))
+    doLast {
+        def hash = java.security.MessageDigest.getInstance('SHA-256').digest(artifact.get().asFile.bytes).encodeHex().toString()
+        layout.buildDirectory.file('libs/MinecraftControlCenter.jar.sha256').get().asFile.setText("${hash}  MinecraftControlCenter.jar\n", 'UTF-8')
+    }
+}
+tasks.named('assemble') { dependsOn 'distributionChecksum' }
+
+tasks.withType(AbstractArchiveTask).configureEach {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+tasks.register('verifyDistribution') {
+    group = 'verification'
+    description = 'Verify that the deliverable contains plugin metadata, backend, dependencies and frontend.'
+    dependsOn 'shadowJar'
+    doLast {
+        def jar = zipTree(tasks.shadowJar.archiveFile.get().asFile)
+        ['plugin.yml', 'dev/mcc/MccPlugin.class', 'web/index.html', 'org/sqlite/JDBC.class'].each { name ->
+            if (jar.matching { include name }.isEmpty()) throw new GradleException("Missing JAR entry: ${name}")
+        }
+        if (!jar.matching { include 'web/assets/*.js' }.files) throw new GradleException('Missing compiled JavaScript')
+        if (jar.matching { include 'org/bukkit/**', 'io/papermc/paper/**' }.files) throw new GradleException('Paper API must not be bundled')
+    }
+}
+tasks.named('check') { dependsOn 'verifyDistribution', 'frontendTest' }

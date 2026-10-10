@@ -1,0 +1,32 @@
+name: MinecraftControlCenter
+version: '${version}'
+main: dev.mcc.MccPlugin
+api-version: '26.1.2'
+description: Embedded real-time Minecraft administration with authenticated web dashboard
+authors: [MCC]
+commands:
+  mcc:
+    description: Show MCC status and local dashboard location
+    permission: mcc.status
+permissions:
+  mcc.status:
+    default: op
+  mcc.punishments:
+    default: op
+    children:
+      mcc.status: true
+      mcc.punishments.warn: true
+      mcc.punishments.kick: true
+      mcc.punishments.mute: true
+      mcc.punishments.ban: true
+      mcc.punishments.revoke: true
+  mcc.punishments.warn:
+    default: op
+  mcc.punishments.kick:
+    default: op
+  mcc.punishments.mute:
+    default: op
+  mcc.punishments.ban:
+    default: op
+  mcc.punishments.revoke:
+    default: op

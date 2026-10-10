@@ -1,0 +1,28 @@
+{
+  "checkedDate": "2026-10-10",
+  "upstreamCommit": "e498bf70aeb25b4bdcff1e44d878fb2cb4f7c2a9",
+  "tables": 16,
+  "mappedCodepoints": 1475,
+  "russianLetters": 66,
+  "missingRussian": [],
+  "extraCyrillicMissing": [],
+  "unitsPerEm": 1080,
+  "ascent": 1200,
+  "descent": -240,
+  "lineGap": 97,
+  "woffDecodedTablesEqualUpstream": true,
+  "files": {
+    "Monocraft.ttf": {
+      "bytes": 210192,
+      "sha256": "262e31822e0a75be567b02320bfa092143d871e8a273e529d1c5ab0c04cd215f"
+    },
+    "Monocraft.woff": {
+      "bytes": 46996,
+      "sha256": "ba89c9ccf96c5d6046e09c6c8bcd8333a3a35881aa11fb1493a257f96abfe1ba"
+    },
+    "LICENSE-Monocraft.txt": {
+      "bytes": 4377,
+      "sha256": "f69c147003e052dbc9d96c40a9f73647e72766cfda95a597b94ed827fe25acb1"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+export type Role = 'Owner' | 'Admin' | 'Moderator' | 'Viewer' | 'owner' | 'admin' | 'moderator' | 'viewer';
+export type Auth = {setupRequired: boolean; authenticated: boolean; user?: {name: string; role: Role}; csrf?: string};
+export type Position = {world: string; x: number; y: number; z: number; yaw?: number; pitch?: number};
+export type World = {name: string; uuid: string; environment: string; time: number; fullTime: number; weather: 'clear' | 'rain' | 'thunder'; difficulty: string; pvp: boolean; loadedChunks: number; entityCount: number; players: number; border: {size: number; x: number; z: number}; spawn: Position; gamerules: Record<string, string | number | boolean>};
+export type Player = {uuid: string; name: string; online: boolean; world?: string; x?: number; y?: number; z?: number; health?: number; maxHealth?: number; food?: number; level?: number; gamemode?: string; ping?: number; op?: boolean; xp?: number; exp?: number; air?: number; fireTicks?: number; allowFlight?: boolean; flying?: boolean; walkSpeed?: number; flySpeed?: number; glowing?: boolean; invisible?: boolean; frozen?: boolean; muted?: boolean; effects?: unknown[]; statistics?: Record<string, unknown>; advancements?: unknown[]};
+export type GameEvent = {id: string; preset: string; world: string; status?: string; state?: string; count?: number; remaining?: number; [key: string]: unknown};
+export type Snapshot = {timestamp: number | string; serverName: string; version: string; minecraftVersion: string; online: number; maxPlayers: number; tps: number[]; mspt: number; uptimeSeconds: number; heapUsed: number; heapMax: number; cpu: number; loadedChunks: number; entityCount: number; worldCount: number; worlds: World[]; activeEvents: GameEvent[]; performanceGuard: boolean; [key: string]: unknown};
+export type Item = {material: string; amount: number; name?: string; lore?: string[]; enchantments?: Record<string, number>; damage?: number; unbreakable?: boolean; maxStackSize?: number};
+export type Inventory = {uuid: string; kind: 'main' | 'ender'; size: number; revision: string; slots: {slot: number; item: Item | null}[]};
+export type Catalogs = {materials: {key: string; name: string; maxStackSize: number; item: boolean; block: boolean}[]; mobs: string[]; effects: string[]; enchantments: {key: string; maxLevel: number}[]; sounds: string[]; eventPresets: string[]};
+export type Metric = {timestamp?: number | string; time?: number | string; tps?: number | number[]; mspt?: number; cpu?: number; heapUsed?: number; ram?: number; online?: number; entityCount?: number; [key: string]: unknown};
+export type StreamEntry = {time?: number | string; timestamp?: number | string; name?: string; player?: string; message?: string; text?: string; action?: string; [key: string]: unknown};
+export type Plugin = {name: string; version: string; enabled: boolean; description?: string; authors?: string[]};
+export type Automation = {id?: string; name: string; trigger: 'join' | 'quit' | 'death' | 'interval'; intervalSeconds?: number; world?: string; action: string; params: Record<string, unknown>; enabled: boolean};
+export type Backup = {id: string; file: string; size: number; sha256: string; time: number | string; status: string};
+export type Settings = {profile: string; modules: Record<string, boolean>; host: string; port: number; performance?: Record<string, unknown>; limits?: Record<string, unknown>};
+export type ActionResult = {ok: boolean; result: unknown; sequence: number; pending?: boolean; id?: string};
