@@ -1,5 +1,10 @@
 [
   {
+    "path": ".gitattributes",
+    "sha256": "b3876e01a5210edad5d1749ea1ed2c5d63ecde3f6699b70a2ad39bb7bd7b9698",
+    "bytes": 89
+  },
+  {
     "path": ".gitignore",
     "sha256": "3740a30cd06e67157047ef83861f8c3ada6eb4cc81b1b6605d57c550db0e1da3",
     "bytes": 61
@@ -16,8 +21,8 @@
   },
   {
     "path": "README.md",
-    "sha256": "d59b32be84899ea3ba665a4408e963b80fbc1e996fa72b2c94a205f41eafb913",
-    "bytes": 10020
+    "sha256": "73deac2f480d01969303354a859a0774d14513d893ac812fa6394c2c241fb49a",
+    "bytes": 10155
   },
   {
     "path": "reused-skills/accessibility/references/A11Y-PATTERNS.md",

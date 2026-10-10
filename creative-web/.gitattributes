@@ -1,0 +1,2 @@
+# Preserve package bytes: manifest SHA-256 is checked across Windows Git clones.
+* -text

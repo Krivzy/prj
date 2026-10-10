@@ -36,7 +36,7 @@
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-Skills.ps1
 ```
 
-Installer проверяет SHA-256 и не перезаписывает отличающиеся существующие skills. Установка только skills: глобальные инструкции, MCP, аккаунты и сайты он не меняет. Эта версия Codex фактически обнаруживает `$CODEX_HOME/skills` (обычно `%USERPROFILE%/.codex/skills`). В более новых hosts сверяйте [официальные discovery paths](https://learn.chatgpt.com/docs/build-skills). Не создавайте mirror в `.agents/skills` без проверки: одинаковые names могут дублироваться.
+Installer проверяет SHA-256 и не перезаписывает отличающиеся существующие skills. `.gitattributes` сохраняет точные байты пакета при clone, включая Windows с `core.autocrlf=true`. Установка только skills: глобальные инструкции, MCP, аккаунты и сайты он не меняет. Эта версия Codex фактически обнаруживает `$CODEX_HOME/skills` (обычно `%USERPROFILE%/.codex/skills`). В более новых hosts сверяйте [официальные discovery paths](https://learn.chatgpt.com/docs/build-skills). Не создавайте mirror в `.agents/skills` без проверки: одинаковые names могут дублироваться.
 
 Для Playwright MCP установите pinned tools в отдельную локальную папку профиля; не внутри проекта сайта и не с global install:
 
