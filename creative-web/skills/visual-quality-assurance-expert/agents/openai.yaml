@@ -1,0 +1,6 @@
+interface:
+  display_name: "Visual Quality Assurance Expert"
+  short_description: "Практический workflow, lifecycle и проверка качества"
+  default_prompt: "Используй $visual-quality-assurance-expert для выполнения моей задачи."
+policy:
+  allow_implicit_invocation: true

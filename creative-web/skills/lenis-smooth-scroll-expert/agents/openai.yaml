@@ -1,0 +1,6 @@
+interface:
+  display_name: "Lenis Smooth Scroll Expert"
+  short_description: "Практический workflow, lifecycle и проверка качества"
+  default_prompt: "Используй $lenis-smooth-scroll-expert для выполнения моей задачи."
+policy:
+  allow_implicit_invocation: true

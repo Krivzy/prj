@@ -1,0 +1,6 @@
+interface:
+  display_name: "Motion for React Expert"
+  short_description: "Практический workflow, lifecycle и проверка качества"
+  default_prompt: "Используй $motion-react-expert для выполнения моей задачи."
+policy:
+  allow_implicit_invocation: true

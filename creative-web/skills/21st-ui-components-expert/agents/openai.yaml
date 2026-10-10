@@ -1,0 +1,6 @@
+interface:
+  display_name: "21st.dev UI Components"
+  short_description: "Практический workflow, lifecycle и проверка качества"
+  default_prompt: "Используй $21st-ui-components-expert для выполнения моей задачи."
+policy:
+  allow_implicit_invocation: true

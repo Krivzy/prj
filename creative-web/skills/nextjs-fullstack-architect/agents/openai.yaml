@@ -1,0 +1,6 @@
+interface:
+  display_name: "Next.js Fullstack Architect"
+  short_description: "Практический workflow, lifecycle и проверка качества"
+  default_prompt: "Используй $nextjs-fullstack-architect для выполнения моей задачи."
+policy:
+  allow_implicit_invocation: true

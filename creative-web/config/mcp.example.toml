@@ -1,0 +1,12 @@
+# Safe example only. Merge new sections; do not replace existing config.toml.
+# Replace placeholder paths with verified absolute paths for your runtime.
+[mcp_servers.playwright]
+command = "node"
+args = ["C:/absolute/tools/creative-web/node_modules/@playwright/mcp/cli.js", "--browser", "msedge", "--headless", "--isolated"]
+startup_timeout_sec = 30
+tool_timeout_sec = 60
+
+[mcp_servers.21st]
+url = "https://21st.dev/api/mcp"
+enabled = false
+bearer_token_env_var = "API_KEY_21ST"

@@ -1,0 +1,6 @@
+interface:
+  display_name: "GSAP Animation Expert"
+  short_description: "Практический workflow, lifecycle и проверка качества"
+  default_prompt: "Используй $gsap-animation-expert для выполнения моей задачи."
+policy:
+  allow_implicit_invocation: true

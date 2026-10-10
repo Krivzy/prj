@@ -1,0 +1,6 @@
+interface:
+  display_name: "GLSL / Shaders Expert"
+  short_description: "Практический workflow, lifecycle и проверка качества"
+  default_prompt: "Используй $glsl-shaders-expert для выполнения моей задачи."
+policy:
+  allow_implicit_invocation: true

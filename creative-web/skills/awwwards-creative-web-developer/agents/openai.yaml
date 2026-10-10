@@ -1,0 +1,6 @@
+interface:
+  display_name: "Awwwards Creative Web Developer"
+  short_description: "Практический workflow, lifecycle и проверка качества"
+  default_prompt: "Используй $awwwards-creative-web-developer для выполнения моей задачи."
+policy:
+  allow_implicit_invocation: true

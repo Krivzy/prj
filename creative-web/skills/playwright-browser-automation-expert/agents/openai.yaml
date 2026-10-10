@@ -1,0 +1,6 @@
+interface:
+  display_name: "Playwright Browser Automation Expert"
+  short_description: "Практический workflow, lifecycle и проверка качества"
+  default_prompt: "Используй $playwright-browser-automation-expert для выполнения моей задачи."
+policy:
+  allow_implicit_invocation: true
