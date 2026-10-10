@@ -1,43 +1,44 @@
-# Minecraft Control Center 0.4 — Overworld
+# Minecraft Control Center 0.5.0 — Overworld
 
-Полная новая визуальная система панели управления Minecraft: charcoal/stone surfaces, emerald accents, Monocraft с кириллицей, собственная 3D voxel-сцена с водой и порталом, Motion/GSAP transitions, адаптивная навигация и поиск Ctrl/Cmd+K. Сохранены 13 функциональных разделов и существующий Java/Paper backend, API, роли и подтверждения действий.
+Paper-плагин с встроенной панелью управления: 13 разделов, реальные игровые данные, HTTP/REST/WebSocket и SQLite. Действующий дизайн — тёмный камень, зелёные акценты, Monocraft с кириллицей и анимированный Minecraft-остров на входе.
+
+В 0.5.0 исправлены адаптивная навигация, названия миров, таблицы, подписи мобов и компоновка настроек. Карта заменена фиксированной изометрией на Canvas2D: реальные верхние блоки сохранённых чанков, перемещение, масштаб, спавн и игроки. Вращение и строительство удалены из UI и runtime; прежние записи строительной истории остаются архивом в существующей базе.
 
 ## Состав и восстановление
 
-Это очищенный публичный снимок исходников, сборки и тестов. База пользователей, миры, конфигурация установленного сервера, credentials, журналы и сторонние Minecraft-изображения сюда не входят. Игровые текстуры восстанавливаются из собственного установленного клиента Minecraft 26.3; original JAR, world data и account database хранятся отдельно у владельца. Monocraft распространяется с SIL OFL 1.1 в `frontend/public/fonts/`.
+Это проверенный публичный снимок исходников, тестов, сборки и документации. Миры, база пользователей, runtime configuration, credentials, журналы, резервные копии, снимки браузера и сторонние Minecraft-изображения в него не входят. Monocraft и его лицензия SIL OFL 1.1 находятся в `frontend/public/fonts/`. Игровые текстуры владелец восстанавливает из своего установленного Minecraft-клиента; без них приложение использует предусмотренные fallback изображения и цвета поверхности.
 
-Требуются JDK 25, Node.js 24, npm, Python 3 для извлечения игровых ресурсов. Gradle wrapper закреплён на 9.2.1. Paper API закреплён в `build.gradle`; native smoke выполнен на Paper 26.3 build 169.
+Требуются JDK 25, Node.js 24 и npm. Gradle wrapper закреплён на 9.2.1. Compile API — Paper26.1.2 build74; проверяемый runtime — Paper26.3 build169. Linux, Folia и другие версии требуют отдельной native проверки.
 
 ```powershell
-python scripts/Extract-Assets.py --client "$env:APPDATA/.minecraft/versions/26.3/26.3.jar"
 npm ci --prefix frontend --ignore-scripts --no-audit --no-fund
 npm run test --prefix frontend
 npm run build --prefix frontend
 .\gradlew.bat --no-daemon -PskipFrontend=true build
 ```
 
-Для Linux используются свой путь к установленному клиенту и `./gradlew` вместо `.\gradlew.bat`. Linux/Folia native server run в рамках этого redesign не проверялись. При полной стандартной Gradle-сборке frontendInstall/frontendTest/frontendBuild запускаются автоматически; `-PskipFrontend=true` допустим только после явно выполненных npm test/build.
+При полной стандартной Gradle-сборке frontend install/test/build выполняются автоматически. `-PskipFrontend=true` используют после явно выполненных npm test/build. Для Linux замените `.\gradlew.bat` на `bash ./gradlew` и настройте свою Java25. Результат — `build/libs/MinecraftControlCenter.jar`, один JAR со встроенным backend и web frontend; отдельный Node.js production process не нужен.
 
-Результат: `build/libs/MinecraftControlCenter.jar`, OneJAR с backend, библиотеками и встроенным web frontend. Отдельный Node.js production process не нужен.
+Локальные игровые изображения восстанавливаются отдельно; extracted assets не предназначены для публикации:
+
+```powershell
+python scripts/Extract-Assets.py --client "$env:APPDATA/.minecraft/versions/26.3/26.3.jar"
+```
 
 ## Установка и обновление
 
-На новом Paper-сервере поместите JAR в `plugins/`, запустите сервер и откройте loopback URL панели. Владелец создаётся с одноразовым приватным `plugins/MinecraftControlCenter/.setup-token`; shared-password bootstrap удалён в 0.4. Пароль владельца 12–128 символов. `auth.bootstrap-admin` сохранён только как совместимый legacy key и не создаёт встроенного пользователя; при обновлении существующая SQLite account database сохраняется.
+На новом Paper-сервере поместите JAR в `plugins/`, запустите Paper и откройте `http://localhost:8080`. Плагин создаёт данные в `plugins/MinecraftControlCenter/`. Первый Owner создаётся через одноразовый приватный `.setup-token` на loopback; общий пароль администратора отключён. Пароль владельца — 12–128 символов. При обновлении существующая SQLite account database сохраняется.
 
-Обновление требует штатной остановки Minecraft: сохраните текущий plugin JAR и закрытую резервную копию plugin data/config/database и миров, замените только JAR, затем запустите прежний launcher. Проверьте версию 0.4.0, вход существующего владельца, `/api/auth/status`, `/api/status`, live connection и нужные игровые разделы. Для отката штатно остановите сервер и верните предыдущий JAR; данные не удаляйте и не публикуйте.
+Template configuration привязан к `127.0.0.1:8080`; `modules.map` включён. Для LAN/HTTPS отдельно настройте разрешённый origin и cookie в собственном runtime config. Этот снимок не публикует сервис в интернете и не изменяет firewall.
 
-## Проверки и границы
+Обновление JAR требует штатной остановки Minecraft. Сохраните текущий JAR и закрытую резервную копию config/database/миров, дождитесь завершения `stop`, замените только plugin JAR и запустите прежний launcher. Проверьте версию 0.5.0, существующий Owner, auth/status, live connection и рабочие разделы. Не используйте `/reload`. Для отката штатно остановите Paper и верните сохранённый предыдущий JAR; базы и миры не удаляйте.
 
-TypeScript/Vite build, 37 Node tests, 65 JUnit tests и OneJAR distribution verification прошли. Проверены 13 страниц × 1440/768/390 px, owner/viewer, login/error states, focus traps, Escape, command navigation, отмена подтверждения, reduced motion, offscreen pause и реальная потеря WebGL context. Сцена ограничена 30 renders/sec и DPR 1.5; это ограничения renderer, а не измеренный FPS на любом устройстве.
+## Карта, API и проверки
 
-Скриншоты браузерной матрицы сняты с изолированными фиктивными API данными. Отдельный native smoke проверяет настоящий Paper, auth и WebSocket; изменения миров и длительный soak в рамках visual redesign не выполняются. Three.js загружается лениво; Vite сообщает о крупном Three chunk и служебных `use client` directives upstream dependencies. 21st.dev/Figma/Context7 connector auth не использовалась как зависимость этой реализации.
+Карта отображает верхнюю поверхность, высоту и приблизительные формы сложных блоков. Внутренности построек и пещеры не показываются. Перед загрузкой MCC проверяет сохранённый статус FULL; отсутствующие и незавершённые чанки остаются missing. Это ограничение запросов карты, а не обещание отсутствия любых фоновых изменений со стороны Paper. Серверные загрузки ограничены, но не имеют нулевой стоимости: cache/pending64, async load1, snapshot максимум1/tick при TPS≥18 с мягким бюджетом1ms. MCC не добавляет plugin chunk tickets: снимок снимается сразу внутри callback, пока действует временный билет загрузки Paper. На чанк передаются256 верхних колонок вместо прежних объёмных слоёв. Браузер рисует по изменениям и приостанавливается в скрытой вкладке.
 
-Не обещаны новые AI-функции, полный world backup, Linux/Folia compatibility или реализация всех исторических roadmap пунктов. Работа посвящена полностью новому интерфейсу существующей панели и безопасной первой настройке.
+Authenticated `/api/build`, `/api/build/*`, `/api/map/detail` и `/api/map/region` возвращают `410 feature_removed` для прежних GET/POST/DELETE операций до чтения тела и запуска игровых задач. Действующие контракты: [API.md](API.md), [изометрическая карта](docs/ISOMETRIC-MAP.md), [ограничения](LIMITATIONS.md), [безопасность](SECURITY.md). Прежний [BUILD-3D-API.md](docs/BUILD-3D-API.md) сохранён исключительно как история удалённых функций.
 
-## Исправление мерцания травы
+Фактические проверки новой версии и границы измерений описаны в [визуальном аудите0.5](docs/VISUAL-AUDIT-0.5.md) и [PERFORMANCE.md](PERFORMANCE.md). Исходные локальные native reports/traces и изображения мира не входят в публичный пакет. Успех source build не заменяет native проверку или проверку работающего сервера; постоянный CPU overhead и FPS на любом устройстве не заявляются.
 
-Блоки травы в русле уменьшены по высоте: нижняя грань совпадает с верхом земли, поверхность русла и вода сохраняют прежний уровень. Пересечения геометрии, вызывавшие z-fighting при анимации, устранены. Два regression tests проверяют все слои острова и границу русла; анимация проверена в браузере.
-
-## Открытый выход водопада
-
-Удалены ровно два блока у выхода русла: трава и земля, через которые проходила вертикальная вода. Пять внутренних блоков русла и остальная геометрия сохранены. Regression test проверяет отсутствие твёрдых блоков на пути водопада.
+Исторические публичные документы [дизайна0.4](docs/DESIGN-0.4.md) и [исправления водопада](docs/WATERFALL-FIX-DEPLOYMENT.md) сохраняются без изменения подтверждённых фактов. Все опубликованные файлы этого снимка проверяются по точным байтам, SHA-256 и Git blob SHA; текущий ref подтверждает основной агент после публикации.

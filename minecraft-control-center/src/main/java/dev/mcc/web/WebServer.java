@@ -64,6 +64,7 @@ public final class WebServer implements AutoCloseable {
                 cookie(e,newSession.id(),28800);db.audit(name,"auth.login","ok",Map.of("source",ip));respond(e,200,auth.status(newSession));return;
             }
             if(s==null){respond(e,401,Map.of("error","unauthorized","message","Sign in first"));return;}
+            if(retiredMapEndpoint(path)){respond(e,410,Map.of("error","feature_removed","message","Карта доступна только для просмотра; строительство удалено"));return;}
             if(!get&&!Auth.constant(e.getRequestHeaders().getFirst(CSRF),s.csrf()))throw new SecurityException("CSRF token is missing or invalid");
             if(post&&path.equals("/api/plugins/stage")){owner(s);String filename=e.getRequestHeaders().getFirst(new HttpString("X-MCC-Filename"));if(filename==null)throw new IllegalArgumentException("X-MCC-Filename is required");Object staged=plugin.pluginStage().upload(filename,e.getInputStream());db.audit(s.name(),"plugins.stage","ok",Map.of("file",filename));respond(e,200,staged);return;}
             if(post&&path.equals("/api/auth/logout")){auth.logout(s);cookie(e,"",0);respond(e,200,Map.of("ok",true));return;}
@@ -90,12 +91,8 @@ public final class WebServer implements AutoCloseable {
             case "/api/players" -> main.await(game::players);
             case "/api/worlds" -> {List<Map<String,Object>> worlds=main.await(game::worlds);if(!Set.of("Owner","Admin").contains(s.role())){List<Map<String,Object>> filtered=new ArrayList<>();for(Map<String,Object> w:worlds){Map<String,Object> c=new LinkedHashMap<>(w);c.remove("seed");filtered.add(c);}yield filtered;}yield worlds;}
             case "/api/catalogs" -> main.await(game::catalogs);
-            case "/api/map/region" -> {mapEnabled();if(!rate.allow(s.name()+":map-region",30,60000))throw new TooMany();String world=query(e,"world","");int x=Integer.parseInt(query(e,"x","0")),y=Integer.parseInt(query(e,"y","64")),z=Integer.parseInt(query(e,"z","0")),size=Integer.parseInt(query(e,"size","16"));yield main.await(()->game.mapRegion(world,x,y,z,size)).get(15,TimeUnit.SECONDS);}
             case "/api/map/terrain" -> {mapEnabled();if(!rate.allow(s.name()+":map-terrain",90,60000))throw new TooMany();String world=query(e,"world","");int cx=Integer.parseInt(query(e,"cx","0")),cz=Integer.parseInt(query(e,"cz","0")),radius=Integer.parseInt(query(e,"radius","2")),step=Integer.parseInt(query(e,"step","1"));yield main.await(()->{active(s);return game.mapTerrain(world,cx,cz,radius,step);});}
             case "/api/map/index" -> {mapEnabled();if(!rate.allow(s.name()+":map-index",10,60000))throw new TooMany();String world=query(e,"world","");yield main.await(()->{active(s);return game.mapIndex(world);}).get(15,TimeUnit.SECONDS);}
-            case "/api/map/detail" -> {admin(s);mapEnabled();if(!rate.allow(s.name()+":map-detail",90,60000))throw new TooMany();String world=query(e,"world","");int x=Integer.parseInt(query(e,"x","0")),y=Integer.parseInt(query(e,"y","64")),z=Integer.parseInt(query(e,"z","0")),size=Integer.parseInt(query(e,"size","16"));yield main.await(()->{active(s);return game.mapDetail(s.name(),world,x,y,z,size);}).get(25,TimeUnit.SECONDS);}
-            case "/api/build/history" -> {admin(s);ensureBuildHistory(s);yield main.await(()->{active(s);return plugin.build().history(s.name());});}
-            case "/api/build/catalog" -> {admin(s);mapEnabled();yield main.await(()->{active(s);return plugin.build().catalog();}).get(15,TimeUnit.SECONDS);}
             case "/api/punishments" -> {moderator(s);String uuid=query(e,"uuid","");yield plugin.punishments().list(uuid.isBlank()?null:dev.mcc.game.PunishmentEngine.uuid(uuid),Integer.parseInt(query(e,"limit","100"))).get();}
             case "/api/map" -> {if(!plugin.module("map"))throw new IllegalStateException("Map module is disabled; enable it in MCC settings");String world=query(e,"world","");int x=Integer.parseInt(query(e,"x","0")),z=Integer.parseInt(query(e,"z","0"));if(Math.abs((long)x)>29999800||Math.abs((long)z)>29999800)throw new IllegalArgumentException("Map coordinates out of bounds");yield main.await(()->game.mapTile(world,x,z,64)).get(25,TimeUnit.SECONDS);}
             case "/api/plugins" -> {admin(s);yield main.await(game::plugins);}
@@ -115,14 +112,12 @@ public final class WebServer implements AutoCloseable {
                 if(path.startsWith("/api/automations/runs/")){admin(s);active(s);String id=path.substring("/api/automations/runs/".length());UUID.fromString(id);yield plugin.automation().runStatus(id);}
                 if(path.startsWith("/api/automations/")&&path.endsWith("/runs")){admin(s);active(s);String id=path.substring("/api/automations/".length(),path.length()-"/runs".length());UUID.fromString(id);yield plugin.automation().history(id,Integer.parseInt(query(e,"limit","10")));}
                 if(path.startsWith("/api/automations/")&&path.endsWith("/export")){admin(s);String id=path.substring("/api/automations/".length(),path.length()-"/export".length());UUID.fromString(id);yield plugin.automation().exportLegacy(id);}
-                if(path.startsWith("/api/build/jobs/")){admin(s);UUID id=UUID.fromString(path.substring("/api/build/jobs/".length()));yield main.await(()->{active(s);return plugin.build().job(s.name(),id);});}if(path.startsWith("/api/actions/")){String id=path.substring(13);UUID.fromString(id);Request request=requests.get(s.name()+":"+id);if(request==null)throw new IllegalArgumentException("Unknown action ID");if(!request.result().isDone())yield pending(id);yield request.result().get();}if(path.startsWith("/api/players/")){String part=path.substring(13);if(part.endsWith("/inventory")){moderator(s);String uuid=part.substring(0,part.length()-10);yield main.await(()->game.inventory(uuid,query(e,"kind","main")));}UUID.fromString(part);yield main.await(()->game.player(part));}throw new IllegalArgumentException("Unknown endpoint");}
+                if(path.startsWith("/api/actions/")){String id=path.substring(13);UUID.fromString(id);Request request=requests.get(s.name()+":"+id);if(request==null)throw new IllegalArgumentException("Unknown action ID");if(!request.result().isDone())yield pending(id);yield request.result().get();}if(path.startsWith("/api/players/")){String part=path.substring(13);if(part.endsWith("/inventory")){moderator(s);String uuid=part.substring(0,part.length()-10);yield main.await(()->game.inventory(uuid,query(e,"kind","main")));}UUID.fromString(part);yield main.await(()->game.player(part));}throw new IllegalArgumentException("Unknown endpoint");}
         };
     }
     @SuppressWarnings("unchecked") private Object post(String path,Map<String,Object> body,Auth.Session s)throws Exception{
         return switch(path){
             case "/api/action" -> action(body,s);
-            case "/api/build/preview" -> {admin(s);mapEnabled();if(!rate.allow(s.name()+":build-preview",60,60000))throw new TooMany();ensureBuildHistory(s);yield main.await(()->{active(s);return plugin.build().preview(s.name(),body);}).get(15,TimeUnit.SECONDS);}
-            case "/api/build/actions" -> {admin(s);mapEnabled();ensureBuildHistory(s);UUID id=UUID.fromString(Json.text(body,"id",""));yield tracked("build."+Json.text(body,"operation",""),body,s,()->main.call(()->{active(s);return (Object)Map.of("ok",true,"result",plugin.build().execute(s.name(),id,body,Boolean.TRUE.equals(body.get("confirmed"))));}));}
             case "/api/punishments" -> {moderator(s);Map<String,Object> values=punishmentBody(body);if(Set.of("ban","kick").contains(Json.text(values,"type","").toLowerCase(Locale.ROOT))&&!Boolean.TRUE.equals(body.get("confirmed")))throw new IllegalArgumentException("Explicit confirmation required");yield tracked("punishment.create",body,s,()->plugin.punishments().create(values,s.name()).thenApply(value->value));}
             case "/api/automations" -> {admin(s);active(s);Map<String,Object> saved=plugin.automation().save(body,s.name(),s.role());db.audit(s.name(),"automation.save","ok",Map.of("id",saved.get("id")));yield saved;}
             case "/api/backups" -> {owner(s);if(plugin.backup().list().size()>=20)throw new IllegalStateException("Backup limit reached; archive old backups offline");Object backup=plugin.backup().create();db.audit(s.name(),"backup.create","ok",Map.of("scope","MCC data"));yield backup;}
@@ -168,15 +163,14 @@ public final class WebServer implements AutoCloseable {
     private static Map<String,Object> pending(String id){return Map.of("ok",false,"pending",true,"id",id,"message","Operation has started; poll /api/actions/"+id+" for the actual result");}
     private void mapEnabled(){if(!plugin.module("map"))throw new IllegalStateException("Enable map in MCC settings");}
     private void active(Auth.Session session){if(auth.session(session.id())!=session)throw new SecurityException("Session changed; log in again");}
-    private void ensureBuildHistory(Auth.Session session)throws Exception{String actor=session.name();if(main.await(()->{active(session);return plugin.build().hasHistory(actor);}))return;Optional<Map<String,Object>> stored=db.document("build-history",actor).get();if(stored.isPresent())main.await(()->{active(session);if(!plugin.build().hasHistory(actor))plugin.build().restoreHistory(actor,stored.get());return null;});}
     private Auth.Session changeAccount(Auth.Session session,Map<String,Object> values)throws Exception{
         String name=Json.text(values,"username",session.name());if(name.isBlank())name=session.name();Auth.validateUsername(name);
-        String destination=name;boolean rename=!destination.equals(session.name());
-        if(rename)main.await(()->{active(session);plugin.build().beginAccountChange(session.name(),destination);return null;});
-        boolean success=false;
-        try{Auth.Session changed=auth.changeAccount(session,Json.text(values,"currentPassword",""),destination,Json.text(values,"password",""));success=true;requests.keySet().removeIf(key->key.startsWith(session.name()+":")||key.startsWith(destination+":"));return changed;}
-        finally{if(rename){boolean migrated=success;main.await(()->{plugin.build().endAccountChange(session.name(),destination,migrated);return null;});}}
+        String destination=name;
+        Auth.Session changed=auth.changeAccount(session,Json.text(values,"currentPassword",""),destination,Json.text(values,"password",""));
+        requests.keySet().removeIf(key->key.startsWith(session.name()+":")||key.startsWith(destination+":"));return changed;
     }
+    /** A stale editor client cannot reach any world mutation or chunk-detail worker. */
+    static boolean retiredMapEndpoint(String path){return path.equals("/api/build")||path.startsWith("/api/build/")||path.equals("/api/map/detail")||path.equals("/api/map/region");}
     private Map<String,Object> punishmentBody(Map<String,Object> body)throws Exception{
         Map<String,Object> values=new LinkedHashMap<>(body);if(!values.containsKey("uuid")&&values.get("player") instanceof String id)values.put("uuid",id);if(!values.containsKey("seconds")&&values.containsKey("durationSeconds"))values.put("seconds",values.get("durationSeconds"));
         String uuid=Json.text(values,"uuid","");dev.mcc.game.PunishmentEngine.uuid(uuid);

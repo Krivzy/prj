@@ -92,10 +92,8 @@ public final class GameService implements Listener, AutoCloseable {
 
     public void setMapEnabled(boolean enabled) { requireMainThread(); mapEngine.enabled(enabled); }
     public java.util.concurrent.CompletableFuture<Map<String, Object>> mapTile(String world, int x, int z, int size) { requireMainThread(); return mapEngine.request(world, x, z, size); }
-    public java.util.concurrent.CompletableFuture<Map<String,Object>> mapRegion(String world,int x,int y,int z,int size) { requireMainThread(); return mapEngine.region(world,x,y,z,size); }
     public Map<String,Object> mapTerrain(String world,int cx,int cz,int radius,int step){requireMainThread();return mapEngine.terrain(world,cx,cz,radius,step);}
     public java.util.concurrent.CompletableFuture<Map<String,Object>> mapIndex(String world){requireMainThread();return mapEngine.worldIndex(world);}
-    public java.util.concurrent.CompletableFuture<Map<String,Object>> mapDetail(String actor,String world,int x,int y,int z,int size){requireMainThread();return mapEngine.detail(actor,world,x,y,z,size);}
     public void invalidateMapTerrain(String world,int x,int z){requireMainThread();mapEngine.invalidateTerrain(world,x,z);}
     public void invalidateMapWorld(String world){requireMainThread();mapEngine.invalidateWorld(world);}
 

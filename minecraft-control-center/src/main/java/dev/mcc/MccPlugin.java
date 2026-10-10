@@ -2,7 +2,6 @@ package dev.mcc;
 
 import dev.mcc.core.*;
 import dev.mcc.game.GameService;
-import dev.mcc.game.BuildEngine;
 import dev.mcc.game.PunishmentEngine;
 import dev.mcc.web.*;
 import org.bukkit.Bukkit;
@@ -18,7 +17,7 @@ import java.util.concurrent.atomic.*;
 public final class MccPlugin extends JavaPlugin {
     private volatile Database db;private volatile Auth auth;private volatile Realtime realtime;private volatile WebServer web;
     private volatile Automation automation;private volatile Backup backup;private volatile LogTail tail;private volatile PluginStage pluginStage;
-    private GameService game;private MainThread main;private BuildEngine build;private volatile PunishmentEngine punishments;
+    private GameService game;private MainThread main;private volatile PunishmentEngine punishments;
     private ScheduledExecutorService background;
     private volatile Map<String,Object> latest=Map.of("status","starting");
     private volatile Map<String,Object> gameSnapshot=Map.of();
@@ -40,7 +39,7 @@ public final class MccPlugin extends JavaPlugin {
             bind=getConfig().getString("web.host","127.0.0.1");port=getConfig().getInt("web.port",8080);
             modules.put("chat",getConfig().getBoolean("modules.chat",true));modules.put("events",getConfig().getBoolean("modules.events",true));modules.put("automations",getConfig().getBoolean("modules.automations",true));modules.put("map",getConfig().getBoolean("modules.map",false));
             profile=getConfig().getString("performance.profile","balanced").toLowerCase(Locale.ROOT);if(!Set.of("eco","balanced","performance").contains(profile))profile="balanced";
-            main=new MainThread(this);game=new GameService(this,this::gameEvent);build=new BuildEngine(this,this::gameEvent);
+            main=new MainThread(this);game=new GameService(this,this::gameEvent);
             game.setConsoleAllowedCommands(new HashSet<>(getConfig().getStringList("console.allowed-commands")));
             background=Executors.newSingleThreadScheduledExecutor(r->{Thread t=new Thread(r,"MCC-Background");t.setDaemon(true);return t;});
             background.execute(this::initialize);
@@ -61,7 +60,7 @@ public final class MccPlugin extends JavaPlugin {
                 if(!punishments.muted(mute.getKey()))punishments.importLegacyMute(mute.getKey(),known.getOrDefault(mute.getKey(),mute.getKey().toString()),mute.getValue()).get();
                 db.deleteDocument("mutes",mute.getKey().toString()).get();
             }
-            main.await(()->{game.setModerationPersistence(this::persistMute);game.setMuteLookup(punishments::muted);game.restoreKnownPlayers(known);game.setEventsEnabled(module("events"));game.setMapEnabled(module("map"));build.enabled(module("map"));build.setPersistence((actor,document)->{Map<String,Object> saved=new LinkedHashMap<>(document);saved.put("actor",actor);return db.document("build-history",actor,saved);});return null;});
+            main.await(()->{game.setModerationPersistence(this::persistMute);game.setMuteLookup(punishments::muted);game.restoreKnownPlayers(known);game.setEventsEnabled(module("events"));game.setMapEnabled(module("map"));return null;});
             automation=new Automation(db,main,game);automation.setEvents(this::gameEvent);automation.enabled(module("automations"));backup=new Backup(db,getDataFolder().toPath());pluginStage=new PluginStage(db,getDataFolder().toPath());
             tail=new LogTail(Path.of("logs","latest.log"),realtime);gameSnapshot=main.await(game::snapshot);publishSnapshot();
             if(stopping.get()){closeServices();return;}
@@ -110,12 +109,6 @@ public final class MccPlugin extends JavaPlugin {
             refreshSoon();return;
         }
         if(topic.equals("timeline")&&database!=null)database.audit("minecraft","game.event","ok",data instanceof Map<?,?>?data:Map.of("event",data));
-        if(topic.equals("build")&&data instanceof Map<?,?> row){
-            if(!stopping.get()&&row.get("changed") instanceof Number changed&&changed.intValue()>0&&Set.of("completed","partial","failed").contains(Objects.toString(row.get("status")))&&row.get("world") instanceof String world){
-                Runnable invalidate=()->{if(!stopping.get()&&game!=null)try{game.invalidateMapWorld(world);}catch(IllegalArgumentException ignored){}};
-                if(Bukkit.isPrimaryThread())invalidate.run();else if(main!=null)main.call(()->{invalidate.run();return null;});
-            }
-            Map<String,Object> details=new LinkedHashMap<>();row.forEach((key,value)->details.put(String.valueOf(key),value));String actor=Objects.toString(row.get("actor"),"minecraft"),status=Objects.toString(row.get("status"),"unknown"),action="build."+Objects.toString(row.get("operation"),"edit");if(database!=null)database.audit(actor,action,status,details);if(bus!=null)bus.publish("timeline",Map.of("time",System.currentTimeMillis(),"actor",actor,"action",action,"status",status));refreshSoon();}
         String wireTopic=switch(topic){case "event"->"events";case "join","quit","death"->"players";case "player"->"inspector";default->topic;};
         if(bus!=null)bus.publish(wireTopic,data);
         if(Set.of("players","world","events","spawn").contains(topic))refreshSoon();
@@ -132,7 +125,6 @@ public final class MccPlugin extends JavaPlugin {
     public Backup backup(){return backup;}
     public PluginStage pluginStage(){return pluginStage;}
     public PunishmentEngine punishments(){return punishments;}
-    public BuildEngine build(){return build;}
     public Path backupServerProperties() throws Exception {
         Path source=Path.of("server.properties").toAbsolutePath().normalize();
         if(!Files.isRegularFile(source)||Files.size(source)>1024*1024)throw new IllegalStateException("Standard server.properties backup is unavailable; configure the server offline");
@@ -157,7 +149,7 @@ public final class MccPlugin extends JavaPlugin {
         Map<String,Object> saved=new LinkedHashMap<>();saved.put("profile",candidate);Map<String,Boolean> proposed=new HashMap<>(modules);
         if(body.get("modules") instanceof Map<?,?> values){for(var e:values.entrySet()){if(!proposed.containsKey(e.getKey())||!(e.getValue() instanceof Boolean))throw new IllegalArgumentException("Unknown module or invalid value");proposed.put((String)e.getKey(),(Boolean)e.getValue());}}
         saved.put("modules",proposed);db.document("settings","runtime",saved).get();loadSettings(saved);
-        if(automation!=null)automation.enabled(module("automations"));main.await(()->{game.setEventsEnabled(module("events"));game.setMapEnabled(module("map"));build.enabled(module("map"));return null;});if(!module("chat"))chatHistory.clear();refreshSoon();return settings();
+        if(automation!=null)automation.enabled(module("automations"));main.await(()->{game.setEventsEnabled(module("events"));game.setMapEnabled(module("map"));return null;});if(!module("chat"))chatHistory.clear();refreshSoon();return settings();
     }
     private boolean command(CommandSender sender,Command command,String label,String[] args){
         if(args.length>0&&Set.of("punish","revoke","history").contains(args[0].toLowerCase(Locale.ROOT))){if(punishments==null){sender.sendPlainMessage("Punishments are starting");return true;}return punishments.handleCommand(sender,args);}
@@ -166,7 +158,7 @@ public final class MccPlugin extends JavaPlugin {
     }
     private void closeServices(){Automation a=automation;automation=null;if(a!=null)a.close();WebServer w=web;web=null;if(w!=null)w.close();PunishmentEngine p=punishments;punishments=null;if(p!=null)p.close();Realtime r=realtime;realtime=null;if(r!=null)r.close();Database d=db;db=null;if(d!=null)d.close();}
     @Override public void onDisable(){
-        stopping.set(true);Automation a=automation;automation=null;if(a!=null)a.close();if(build!=null)build.close();if(main!=null)main.close();if(game!=null)game.close();Bukkit.getScheduler().cancelTasks(this);
+        stopping.set(true);Automation a=automation;automation=null;if(a!=null)a.close();if(main!=null)main.close();if(game!=null)game.close();Bukkit.getScheduler().cancelTasks(this);
         if(background!=null)background.shutdownNow();closeServices();getLogger().info("Minecraft Control Center stopped; resources released.");
     }
 }

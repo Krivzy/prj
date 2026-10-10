@@ -73,7 +73,7 @@ export function Modal({title, children, close, danger = false}: {title: string; 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     const container = ref.current;
-    const focusables = () => Array.from(container?.querySelectorAll<HTMLElement>('button:not([disabled]),input,select,textarea,a[href],[tabindex="0"]') ?? []);
+    const focusables = () => Array.from(container?.querySelectorAll<HTMLElement>('button,input,select,textarea,a[href],[tabindex]') ?? []).filter(element => element.tabIndex >= 0 && !element.matches(':disabled') && !element.closest('[hidden],[inert]') && element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden');
     if(!modalStack.length)restoreOverflow=document.body.style.overflow;
     modalStack.push(id);(container?.querySelector<HTMLElement>('[data-autofocus]') ?? focusables()[0])?.focus();
     const handler = (event: KeyboardEvent) => {

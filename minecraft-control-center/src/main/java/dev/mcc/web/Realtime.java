@@ -13,7 +13,7 @@ public final class Realtime implements AutoCloseable {
     private final AtomicLong sequence=new AtomicLong(),published=new AtomicLong(),dropped=new AtomicLong();
     private final RateLimiter inbound=new RateLimiter();
     private volatile boolean closed;
-    private static final Set<String> TOPICS=Set.of("state","players","chat","console","timeline","events","inspector","world","spawn","inventory","punishments","build","automation");
+    private static final Set<String> TOPICS=Set.of("state","players","chat","console","timeline","events","inspector","world","spawn","inventory","punishments","automation");
     private static final class Client {
         final Auth.Session session;final Set<String> topics=ConcurrentHashMap.newKeySet();final ArrayDeque<String> queue=new ArrayDeque<>();boolean sending;
         Client(Auth.Session s){session=s;}
@@ -41,7 +41,7 @@ public final class Realtime implements AutoCloseable {
             @Override protected void onError(WebSocketChannel ch,Throwable error){closeChannel(ch,1011,"Connection error");}
         });channel.resumeReceives();offer(channel,client,Json.write(Map.of("type","hello","sequence",sequence.get())));
     }
-    private static boolean permitted(String role,String topic){return Set.of("console","build","automation").contains(topic)?Set.of("Owner","Admin").contains(role):!Set.of("chat","inventory","punishments","timeline").contains(topic)||!role.equals("Viewer");}
+    private static boolean permitted(String role,String topic){return Set.of("console","automation").contains(topic)?Set.of("Owner","Admin").contains(role):!Set.of("chat","inventory","punishments","timeline").contains(topic)||!role.equals("Viewer");}
     public void publish(String topic,Object data){
         if(closed)return;
         try{encoder.execute(()->{

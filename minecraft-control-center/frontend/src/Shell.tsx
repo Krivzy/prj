@@ -51,10 +51,11 @@ export default function Shell({page, changeLang, profile, logout, children}: {
           </div>)}
         </nav>
         <div className="sidebar-end"><span className="sidebar-world-line"/><p>{app.t('Большие идеи.\nБесконечный мир.','Big ideas.\nAn infinite world.')}</p><span className="sidebar-caption">One world. Your rules.</span></div>
+        <div className="sidebar-mobile-actions"><button className="nav-item" onClick={logout}><Icon name="logout" size={18}/><span>{app.t('Выйти из панели','Sign out')}</span></button></div>
       </aside>
       <div className="workspace">
         <header className="topbar">
-          <button className="mobile-menu icon-button" aria-label={app.t('Открыть навигацию','Open navigation')} aria-expanded={menu} aria-controls="workspace-navigation" onClick={() => setMenu(value => !value)}><span/><span/><span/></button>
+          <button className="mobile-menu icon-button" aria-label={menu?app.t('Закрыть навигацию','Close navigation'):app.t('Открыть навигацию','Open navigation')} aria-expanded={menu} aria-controls="workspace-navigation" onClick={() => setMenu(value => !value)}><span/><span/><span/></button>
           <div className="breadcrumb"><span>{app.t('Пульт управления','Control center')}</span><strong>{title?.[app.lang]}</strong></div>
           <div className="topbar-actions">
             <button className="command-launcher" onClick={() => {setQuery(''); setCommands(true);}} aria-label={app.t('Найти раздел','Find a section')}><Icon name="search" size={17}/><span>{app.t('Перейти к…','Jump to…')}</span><kbd>Ctrl K</kbd></button>

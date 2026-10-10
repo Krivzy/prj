@@ -1,76 +1,168 @@
-import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
-import {post,request} from './api';
-import {formatNumber,time,useApp,useResource} from './context';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {request} from './api';
+import {formatNumber, useApp, useResource} from './context';
 import {useLive} from './live';
-import {GameImage,assetName,useAssets} from './assets';
-import {Button,ErrorBox,Icon,Panel} from './ui';
-import {adjacent,normalizedBounds,volume} from './map3d-geometry';
-import {regionCell} from './map3d';
-import {mergeTerrainTiles,previewReadCenter} from './worldmap-geometry';
-import type {BuildHistory,BuildJob,BuildParams,Preview,Region,Selection,Vec3} from './map3d';
-import type {BuildCatalog,Terrain,WorldIndex,WorldView} from './worldmap';
-import './Map3D.css';
+import {GameImage, assetName, useAssets} from './assets';
+import {Button, ErrorBox, Icon} from './ui';
+import {IsometricMap} from './isometric-map';
+import {INITIAL_ZOOM, mergeSurfaceTiles, project, unproject, viewportFor} from './map-surface';
+import type {Point, SurfaceCell, SurfaceTile, Terrain, WorldIndex} from './map-surface';
+import './IsometricMap.css';
 
-const tools=[{id:'place',ru:'Поставить',en:'Place',item:'bricks'},{id:'remove',ru:'Убрать',en:'Remove',item:'iron_pickaxe'},{id:'fill',ru:'Заливка',en:'Fill',item:'white_concrete'},{id:'line',ru:'Линия',en:'Line',item:'stick'},{id:'box',ru:'Каркас',en:'Box',item:'glass'},{id:'sphere',ru:'Сфера',en:'Sphere',item:'slime_ball'},{id:'copy',ru:'Копировать',en:'Copy',item:'paper'},{id:'paste',ru:'Вставить',en:'Paste',item:'writable_book'}];
-const terminal=new Set(['completed','partial','failed']),message=(e:unknown)=>e instanceof Error?e.message:String(e),coords=(p:Vec3)=>`${p.x}, ${p.y}, ${p.z}`,rounded=(p:Vec3)=>({x:Math.floor(p.x),y:Math.floor(p.y),z:Math.floor(p.z)}),wait=(ms:number)=>new Promise(r=>window.setTimeout(r,ms));
-function CoordinateFields({label,value,change,disabled=false}:{label:string;value:Vec3;change:(p:Vec3)=>void;disabled?:boolean}){return <fieldset className="map-coordinate-fields" disabled={disabled}><legend>{label}</legend><div>{(['x','y','z'] as const).map(axis=><label key={axis}><span>{axis.toUpperCase()}</span><input aria-label={`${label} ${axis.toUpperCase()}`} type="number" step="1" min={axis==='y'?-2048:-29999984} max={axis==='y'?2048:29999984} value={value[axis]} onChange={e=>change({...value,[axis]:Number(e.target.value)})}/></label>)}</div></fieldset>;}
-function WorldOverview({index,cx,cz,jump,t}:{index:WorldIndex|null;cx:number;cz:number;jump:(x:number,z:number)=>void;t:(ru:string,en:string)=>string}){
-  const ref=useRef<HTMLCanvasElement>(null),geometry=useRef<{x:number;z:number;scale:number}|null>(null);
-  useEffect(()=>{const canvas=ref.current,ctx=canvas?.getContext('2d');if(!canvas||!ctx)return;ctx.clearRect(0,0,300,180);ctx.fillStyle='#19222B';ctx.fillRect(0,0,300,180);if(!index?.bounds){geometry.current=null;return;}const b=index.bounds,scale=Math.min(276/(b.maxX-b.minX+1),156/(b.maxZ-b.minZ+1)),x=150-(b.minX+b.maxX+1)*scale/2,z=90-(b.minZ+b.maxZ+1)*scale/2;geometry.current={x,z,scale};ctx.fillStyle='#719589';const drawn=new Set<number>();for(const region of index.regions){const bitmap=atob(region.presence);for(let i=0;i<1024;i++)if(bitmap.charCodeAt(i>>3)&(1<<(i&7))){const px=Math.floor(x+(region.rx*32+i%32)*scale),pz=Math.floor(z+(region.rz*32+Math.floor(i/32))*scale),key=px+300*pz;if(drawn.has(key))continue;drawn.add(key);ctx.fillRect(px,pz,Math.max(1,scale),Math.max(1,scale));}}ctx.strokeStyle='#D8753C';ctx.lineWidth=2;ctx.strokeRect(x+(cx-2)*scale,z+(cz-2)*scale,Math.max(5,5*scale),Math.max(5,5*scale));ctx.fillStyle='#62D6E9';ctx.beginPath();ctx.arc(x+(cx+.5)*scale,z+(cz+.5)*scale,3,0,Math.PI*2);ctx.fill();},[index,cx,cz]);
-  return <div className="map-world-overview"><div><strong>{t('Весь сохранённый мир','Entire saved world')}</strong><span>{formatNumber(index?.savedChunks)} {t('чанков','chunks')}</span></div><canvas ref={ref} width={300} height={180} aria-label={t('Обзор мира. Нажмите область для перехода.','World overview. Click an area to visit.')} onClick={e=>{const g=geometry.current;if(!g)return;const r=e.currentTarget.getBoundingClientRect();jump(Math.floor(((e.clientX-r.left)*300/r.width-g.x)/g.scale)*16,Math.floor(((e.clientY-r.top)*180/r.height-g.z)/g.scale)*16);}}/><small>{index?.truncated?t('Показаны первые 2048 файлов регионов.','Showing the first 2048 region files.'):t('Выберите область. Детали подгружаются рядом с камерой.','Choose an area. Detail streams around the camera.')}</small></div>;
+const coordinates = (p: Point) => [p.x, p.y, p.z].map(Math.floor).join(', ');
+const detail = (error: unknown) => error instanceof Error ? error.message : String(error);
+type Viewport = ReturnType<typeof viewportFor>;
+
+function WorldOverview({index, cx, cz, jump, t}: {index: WorldIndex | null; cx: number; cz: number; jump: (x: number, z: number) => void; t: (ru: string, en: string) => string}) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const base = useMemo(() => {
+    if (!index?.bounds) return null;
+    const {minX, maxX, minZ, maxZ} = index.bounds;
+    const origin = {x: (minX + maxX + 1) / 2, y: 0, z: (minZ + maxZ + 1) / 2};
+    const scale = Math.min(264 / ((maxX - minX + maxZ - minZ + 2) * 8), 140 / ((maxX - minX + maxZ - minZ + 2) * 4));
+    const image = document.createElement('canvas'); image.width = 288; image.height = 164;
+    const ctx = image.getContext('2d')!; ctx.fillStyle = '#81e9a1';
+    const pixels = new Set<number>();
+    for (const region of index.regions) {
+      const bits = atob(region.presence);
+      for (let i = 0; i < 1024; i++) {
+        if (!(bits.charCodeAt(i >> 3) & (1 << (i & 7)))) continue;
+        const p = project({x: region.rx * 32 + i % 32 + .5, y: 0, z: region.rz * 32 + Math.floor(i / 32) + .5}, origin);
+        const x = Math.floor(144 + p.x * scale), y = Math.floor(82 + p.y * scale), key = x + y * 288;
+        if (x < 0 || x >= 288 || y < 0 || y >= 164 || pixels.has(key)) continue;
+        pixels.add(key); ctx.fillRect(x, y, Math.max(1, 8 * scale), Math.max(1, 4 * scale));
+      }
+    }
+    return {image, origin, scale};
+  }, [index]);
+  useEffect(() => {
+    const ctx = canvas.current?.getContext('2d'); if (!ctx) return;
+    ctx.fillStyle = '#111c19'; ctx.fillRect(0, 0, 288, 164);
+    if (!base) return;
+    ctx.globalAlpha = .55; ctx.drawImage(base.image, 0, 0); ctx.globalAlpha = 1;
+    const p = project({x: cx + .5, y: 0, z: cz + .5}, base.origin);
+    ctx.strokeStyle = '#f2d88b'; ctx.lineWidth = 2; ctx.strokeRect(144 + p.x * base.scale - 4, 82 + p.y * base.scale - 4, 8, 8);
+  }, [base, cx, cz]);
+  return <section className="iso-map-panel"><div className="iso-map-panel-heading"><h3>{t('Сохранённые области', 'Saved areas')}</h3><span>{formatNumber(index?.savedChunks)} {t('чанков', 'chunks')}</span></div>
+    <canvas ref={canvas} width={288} height={164} aria-label={t('Сохранённые области мира. Для точного перехода используйте координаты.', 'Saved world areas. Use coordinates for precise navigation.')} onClick={e => {
+      if (!base) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const p = unproject({x: ((e.clientX - rect.left) * 288 / rect.width - 144) / base.scale, y: ((e.clientY - rect.top) * 164 / rect.height - 82) / base.scale}, base.origin);
+      jump(Math.floor(p.x) * 16, Math.floor(p.z) * 16);
+    }}/><p>{index?.truncated ? t('Обзор ограничен 2048 файлами регионов.', 'Overview is limited to 2048 region files.') : t('Выберите область или введите координаты.', 'Choose an area or enter coordinates.')}</p>
+  </section>;
 }
 
-export default function MapPage(){
-  const app=useApp(),{snapshot,players}=useLive(),assets=useAssets(),canBuild=app.administrator;
-  const [world,setWorld]=useState(''),[center,setCenter]=useState<Vec3>({x:0,y:64,z:0}),[viewport,setViewport]=useState({cx:0,cz:0,radius:2,step:1}),[terrain,setTerrain]=useState<Terrain|null>(null),[detail,setDetail]=useState<Region|null>(null),[selection,setSelection]=useState<Selection|null>(null),[error,setError]=useState(''),[renderError,setRenderError]=useState(''),[loading,setLoading]=useState(false),[sceneReady,setSceneReady]=useState(false);
-  const [editing,setEditing]=useState(canBuild),[mode,setMode]=useState('place'),[material,setMaterial]=useState('STONE'),[blockData,setBlockData]=useState('minecraft:stone'),[search,setSearch]=useState(''),[a,setA]=useState<Vec3|null>(null),[b,setB]=useState<Vec3|null>(null),[rotation,setRotation]=useState(0),[extend,setExtend]=useState(false),[preview,setPreview]=useState<Preview|null>(null),[previewParams,setPreviewParams]=useState<BuildParams|null>(null),[busy,setBusy]=useState(false),[job,setJob]=useState<BuildJob|null>(null),[history,setHistory]=useState<BuildHistory|null>(null);
-  const index=useResource<WorldIndex>(world?`/api/map/index?world=${encodeURIComponent(world)}`:null),catalog=useResource<BuildCatalog>(canBuild?'/api/build/catalog':null),actorKey=`mcc-map-operation:${app.auth.user?.name}`;
-  const [submittedId,setSubmittedId]=useState<string|null>(()=>localStorage.getItem(actorKey));
-  const host=useRef<HTMLDivElement>(null),view=useRef<WorldView|null>(null),alive=useRef(true),initialized=useRef(false),inFlight=useRef(false),busyRef=useRef(false),editingRef=useRef(editing),currentWorld=useRef(world),selectCallback=useRef<(s:Selection,shift:boolean,button:number,inspect:boolean)=>void>(()=>{}),viewportCallback=useRef<(p:Vec3,d:number)=>void>(()=>{}),refresh=useRef<()=>Promise<void>>(async()=>{}),lastDetailPoint=useRef<Vec3|null>(null);
-  const viewportKey=useRef('');currentWorld.current=world;viewportKey.current=`${world}:${viewport.cx}:${viewport.cz}:${viewport.radius}:${viewport.step}`;editingRef.current=editing;
-  const invalidate=()=>{setPreview(null);setPreviewParams(null);},setLocked=(v:boolean)=>{busyRef.current=v;if(alive.current)setBusy(v);},setFailure=(e:unknown)=>{if(alive.current)setError(message(e));};
-  const loadTerrain=useCallback(async()=>{if(!world||inFlight.current)return;const key=viewportKey.current;inFlight.current=true;setLoading(true);try{const q=new URLSearchParams({world,...Object.fromEntries(Object.entries(viewport).map(([k,v])=>[k,String(v)]))}),next=await request<Terrain>(`/api/map/terrain?${q}`);if(alive.current&&viewportKey.current===key)setTerrain(old=>({...next,tiles:mergeTerrainTiles(old?.world,old?.tiles,next.world,next.tiles)}));}catch(e){setFailure(e);}finally{inFlight.current=false;if(alive.current)setLoading(false);}},[world,viewport]);
-  refresh.current=loadTerrain;
-  async function loadDetail(p:Vec3){const name=currentWorld.current,q=new URLSearchParams({world:name,x:String(p.x),y:String(p.y),z:String(p.z),size:'16'}),next=await request<Region>(`/api/map/detail?${q}`);if(currentWorld.current!==name)throw new Error(app.t('Мир изменился. Повторите выбор.','World changed. Select again.'));lastDetailPoint.current=p;if(alive.current)setDetail(next);return next;}
-  async function refreshHistory(){if(!canBuild)return;try{const next=await request<BuildHistory>('/api/build/history');if(alive.current)setHistory(next);}catch(e){setFailure(e);}}
-  useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
-  useEffect(()=>{if(initialized.current||!snapshot?.worlds.length)return;initialized.current=true;const w=snapshot.worlds[0],p=rounded(w.spawn);setWorld(w.name);setCenter(p);setViewport({cx:Math.floor(p.x/16),cz:Math.floor(p.z/16),radius:2,step:1});},[snapshot]);
-  useEffect(()=>{if(!world)return;void loadTerrain();const timer=window.setInterval(()=>{if(!document.hidden&&!busyRef.current)void loadTerrain();},terrain?.pending?1000:5000);return()=>clearInterval(timer);},[loadTerrain,terrain?.pending]);
-  useEffect(()=>{if(canBuild)void refreshHistory();},[canBuild]);
-  viewportCallback.current=(p,d)=>{setCenter(rounded(p));setViewport(prev=>{const next={cx:Math.floor(p.x/16),cz:Math.floor(p.z/16),radius:d>180?3:2,step:d>400?4:d>180?2:1};return Object.keys(next).every(k=>next[k as keyof typeof next]===prev[k as keyof typeof prev])?prev:next;});};
-  useEffect(()=>{if(!host.current)return;let active=true;const el=host.current,failed=(e:Event)=>setRenderError((e as CustomEvent<string>).detail);el.addEventListener('mcc-map-error',failed);void import('./worldmap').then(({WorldView})=>{if(active){view.current=new WorldView(el,(...args)=>selectCallback.current(...args),(...args)=>viewportCallback.current(...args));setSceneReady(true);}}).catch(setFailure);return()=>{active=false;el.removeEventListener('mcc-map-error',failed);view.current?.dispose();view.current=null;};},[]);
-  useEffect(()=>{if(world&&sceneReady)view.current?.setWorld(world,center);},[world,sceneReady]);
-  useEffect(()=>{if(terrain&&terrain.world===world&&sceneReady){view.current?.setTerrain(terrain,detail?.world===world?detail:null,assets);view.current?.setSelection(selection);view.current?.setBounds(preview?.bounds??(a&&b&&!['place','remove'].includes(mode)?normalizedBounds(a,b):null));}},[terrain,detail,assets,sceneReady,world,selection,preview,a,b,mode]);
-  function jump(name:string,p:Vec3){const point=rounded(p);if(name!==world){setWorld(name);setTerrain(null);}setDetail(null);lastDetailPoint.current=null;setSelection(null);setA(null);setB(null);setExtend(false);invalidate();setCenter(point);setViewport({cx:Math.floor(point.x/16),cz:Math.floor(point.z/16),radius:2,step:1});view.current?.setGhost([]);view.current?.setWorld(name,point);}
-  function saveSubmitted(id:string|null){setSubmittedId(id);if(id)localStorage.setItem(actorKey,id);else localStorage.removeItem(actorKey);}
-  async function followJob(next:BuildJob){if(!alive.current)return;if(alive.current)setJob(next);const deadline=Date.now()+90_000;while(alive.current&&!terminal.has(next.status)){if(Date.now()>deadline)throw new Error(app.t('Операция ещё выполняется. Проверьте сохранённый ID.','Operation still running. Check the saved ID.'));await wait(700);if(!alive.current)return;next=await request<BuildJob>(`/api/build/jobs/${next.jobId}`);if(alive.current)setJob(next);}if(!alive.current)return;if(next.status!=='completed'){saveSubmitted(null);await Promise.allSettled([refresh.current(),refreshHistory(),...(next.changed>0&&lastDetailPoint.current?[loadDetail(lastDetailPoint.current)]:[])]);throw new Error(next.message??app.t('Операция завершилась частично. Доступна отмена.','Operation incomplete. Undo is available.'));}saveSubmitted(null);if(alive.current){app.notify(app.t(`Изменено ${next.changed} блоков в Minecraft`,`Changed ${next.changed} Minecraft blocks`));invalidate();if(lastDetailPoint.current)await loadDetail(lastDetailPoint.current);await Promise.allSettled([refresh.current(),refreshHistory()]);}}
-  async function resolveAction(id:string,response?:{pending?:boolean;result?:BuildJob}){let result=response??await request<{pending?:boolean;result?:BuildJob}>(`/api/actions/${id}`),deadline=Date.now()+90_000;while(alive.current&&result.pending){if(Date.now()>deadline)throw new Error(app.t('Ответ ожидается. Проверьте сохранённый ID.','Result pending. Check the saved ID.'));await wait(700);if(!alive.current)return;result=await request(`/api/actions/${id}`);}if(!alive.current)return;if(!result.result?.jobId)throw new Error(app.t('Сервер не вернул ID операции.','Server did not return an operation ID.'));await followJob(result.result);}
-  async function execute(body:BuildParams,p:Preview){if(!alive.current||!editingRef.current)return;if(!p.token||!p.changes)throw new Error(app.t('Изменений нет: целевой блок уже имеет это состояние.','No changes: target already has this block state.'));let confirmed=false;if(p.requiresConfirmation){confirmed=await app.confirm(app.t(`Изменить ${p.changes} блоков в мире ${body.world}?`,`Change ${p.changes} blocks in ${body.world}?`));if(!confirmed)return;}if(!alive.current||!editingRef.current)return;const id=crypto.randomUUID();saveSubmitted(id);const result=await post<{pending?:boolean;result?:BuildJob}>('/api/build/actions',{...body,id,previewToken:p.token,confirmed});await resolveAction(id,result);}
-  async function directBuild(selected:Selection,button:number){if(!canBuild||!editingRef.current||busyRef.current)return;setLocked(true);setError('');const operation=button===2||mode==='remove'?'remove':'place',target=operation==='place'?adjacent(selected):selected.point;try{if(operation==='place'){const block=catalog.data?.blocks.find(b=>b.material===material);if(!block?.supported)throw new Error(block?.reason??app.t('Дождитесь списка доступных блоков.','Wait for the supported block list.'));}view.current?.setGhost([target],operation==='remove'?'#D8753C':'#169DB3');const actual=await loadDetail(target);if(!alive.current||!editingRef.current)return;const cell=regionCell(actual,target);if(cell===undefined||cell===null)throw new Error(app.t('Целевой чанк недоступен. Повторите после загрузки.','Target chunk is unavailable. Retry after loading.'));if(operation==='place'&&!cell.air)throw new Error(app.t('Рядом с этой гранью уже есть блок. Выберите свободную грань или уберите его правым кликом.','A block occupies this face. Choose a free face or remove it with right click.'));const body:BuildParams={operation,world,min:target,...(operation==='place'?{blockData}:{})},next=await post<Preview>('/api/build/preview',body);if(!alive.current||!editingRef.current)return;await execute(body,next);}catch(e){setFailure(e);}finally{view.current?.setGhost([]);setLocked(false);}}
-  selectCallback.current=(selected,shift,button,inspect)=>{if(busyRef.current)return;setSelection(selected);invalidate();if(shift||extend){setA(old=>old??selected.point);setB(selected.point);setExtend(false);return;}setA(selected.point);setB(selected.point);if(canBuild&&editing&&!inspect&&['place','remove'].includes(mode))void directBuild(selected,button);else if(canBuild&&editing&&!inspect)void loadDetail(selected.point).catch(setFailure);};
-  const params=useMemo<BuildParams|null>(()=>{if(!world||!a)return null;const base={operation:mode,world};if(mode==='paste')return{...base,origin:selection?adjacent(selection):a,rotation};if(mode==='place')return{...base,min:selection?adjacent(selection):a,blockData};if(mode==='remove')return{...base,min:selection?.point??a};return b?{...base,min:a,max:b,...(mode==='copy'?{}:{blockData})}:null;},[world,mode,a,b,selection,rotation,blockData]);
-  async function makePreview(operation?:string){if(!canBuild||!editingRef.current||busyRef.current)return;const body=operation?{operation,world}:params;if(!body)return;setLocked(true);setError('');try{const readPoint=previewReadCenter(body,history?.clipboard.size);if(readPoint)await loadDetail(readPoint);if(!alive.current||!editingRef.current)return;const next=await post<Preview>('/api/build/preview',body);if(!alive.current||!editingRef.current)return;if(next.operation==='copy'){invalidate();app.notify(app.t(`Скопировано ${next.copied} блоков`,`Copied ${next.copied} blocks`));await refreshHistory();}else if(operation)await execute(body,next);else{setPreview(next);setPreviewParams(body);}}catch(e){setFailure(e);}finally{setLocked(false);}}
-  async function apply(){if(!editingRef.current||!preview||!previewParams||busyRef.current)return;setLocked(true);setError('');try{await execute(previewParams,preview);}catch(e){setFailure(e);}finally{setLocked(false);}}
-  async function recover(){if(!submittedId||busyRef.current)return;setLocked(true);setError('');try{await resolveAction(submittedId);}catch(e){setFailure(e);}finally{setLocked(false);}}
-  function changeEditing(value:boolean){editingRef.current=value;setEditing(value);setExtend(false);invalidate();if(!value){setDetail(null);lastDetailPoint.current=null;}view.current?.setGhost([]);}
-  const ready=terrain?.tiles.filter(t=>t.status==='ready').length??0,refreshing=terrain?.tiles.filter(t=>t.refreshing).length??0,missing=terrain?.tiles.filter(t=>t.status==='missing').length??0,hasCells=terrain?.tiles.some(t=>t.voxels?.some(v=>v!==null))??false,tooLarge=a&&b&&volume(normalizedBounds(a,b))>4096&&!['place','remove','paste','line'].includes(mode),safeBlock=catalog.data?.blocks.find(b=>b.material===material),found=useMemo(()=>{const q=search.trim().toLowerCase();return(catalog.data?.blocks??[]).filter(b=>!q||b.material.toLowerCase().includes(q)||assetName(assets,'blocks',b.material,app.lang).toLowerCase().includes(q)).slice(0,96);},[catalog.data,search,assets,app.lang]);
-  return <div className="map3d-page"><div className="page-heading"><div><h1>{app.t('Мир без рамок','A world without borders')}</h1><p>{app.t('Исследуйте сохранённый мир. Стройте прямо на карте.','Explore the saved world. Build directly on the map.')}</p></div><div className="map-mode-switch"><button className={!editing?'active':''} onClick={()=>changeEditing(false)}>{app.t('Исследование','Explore')}</button>{canBuild&&<button className={editing?'active':''} onClick={()=>changeEditing(true)}>{app.t('Редактор','Editor')}</button>}</div></div>
-    <div className="map3d-location"><label className="map3d-world"><GameImage id="grass_block" kind="blocks" size={30}/><select aria-label={app.t('Мир','World')} value={world} disabled={busy} onChange={e=>{const w=snapshot?.worlds.find(w=>w.name===e.target.value);if(w)jump(w.name,w.spawn);}}>{snapshot?.worlds.map(w=><option key={w.uuid} value={w.name}>{w.name}</option>)}</select></label><CoordinateFields label={app.t('Координаты камеры','Camera coordinates')} value={center} change={setCenter} disabled={busy}/><Button className="primary" disabled={!world||busy} onClick={()=>jump(world,center)}><Icon name="arrow" size={16}/>{app.t('Перейти','Go')}</Button><Button disabled={busy||!world} onClick={()=>{const w=snapshot?.worlds.find(w=>w.name===world);if(w)jump(world,w.spawn);}}>{app.t('Спавн','Spawn')}</Button></div>
-    {(error||index.error||catalog.error)&&<ErrorBox error={error||index.error||catalog.error}/>} {renderError&&<ErrorBox error={renderError}/>}
-    <div className="map3d-layout"><section className="map3d-stage" aria-label={app.t('Трёхмерная карта Minecraft','Minecraft 3D map')}><div className="map3d-canvas" ref={host}/><div className="map3d-stage-top"><span className="map3d-world-chip"><i/>{world||'Minecraft'}<small>{editing?app.t('РЕДАКТОР','EDITOR'):app.t('ОБЗОР','EXPLORE')}</small></span><div className="map3d-view-buttons"><button aria-label={app.t('Вернуть камеру','Reset camera')} onClick={()=>view.current?.home()}><Icon name="worlds" size={18}/></button><button aria-label={app.t('Вид сверху','Top view')} onClick={()=>view.current?.top()}><GameImage id="filled_map" size={20}/></button><button aria-label={app.t('Обновить карту','Refresh map')} onClick={()=>void refresh.current()}><Icon name="refresh" size={18}/></button></div></div>
-    {!hasCells&&!terrain?.pending&&<div className="map3d-empty"><GameImage id="filled_map" size={64}/><h2>{app.t('Здесь нет сохранённого ландшафта','No saved terrain here')}</h2><p>{app.t('Выберите область на обзоре мира или вернитесь к спавну. Новые чанки карта не генерирует.','Choose an area in the overview or return to spawn. New chunks are never generated.')}</p></div>}
-    {(loading||terrain?.pending||busy)&&<div className="map3d-reading" role="status"><span/><span/><span/>{busy?app.t('Применяем в Minecraft…','Applying in Minecraft…'):app.t('Читаем сохранённые чанки…','Reading saved chunks…')}</div>}
-    <div className="map3d-stage-bottom"><div><strong>{ready}/{terrain?.tiles.length??25}</strong><span>{app.t('чанков в кадре','chunks in view')}{refreshing>0&&app.t(` · обновляем ${refreshing}`,` · refreshing ${refreshing}`)}</span></div><div><strong>{formatNumber(index.data?.savedChunks)}</strong><span>{app.t('сохранено в мире','saved in world')}</span></div><span>{`X ${viewport.cx*16} · Z ${viewport.cz*16}`}</span></div><div className="map-click-help">{editing&&['place','remove'].includes(mode)?app.t(mode==='remove'?'Клик — убрать · Ctrl — осмотр':'ЛКМ — поставить · ПКМ — убрать · Ctrl — осмотр',mode==='remove'?'Click removes · Ctrl inspects':'Left places · Right removes · Ctrl inspects'):app.t('Клик — выбрать · Shift — второй угол','Click selects · Shift selects end')}<small>{app.t('Перетаскивание — камера · Колёсико — масштаб','Drag moves camera · Scroll zooms')}</small></div></section>
-    <aside className="map3d-tools"><Panel className="map-world-panel"><WorldOverview index={index.data?.world===world?index.data:null} cx={viewport.cx} cz={viewport.cz} jump={(x,z)=>jump(world,{x,y:center.y,z})} t={app.t}/></Panel><Panel className="map3d-selection"><div className="map3d-selected-block"><GameImage id={selection?.material??material} kind="blocks" size={42}/><div><strong>{selection?assetName(assets,'blocks',selection.material,app.lang):app.t('Выберите грань блока','Select a block face')}</strong><small>{selection?coords(selection.point):app.t('Реальные блоки и текстуры','Real blocks and textures')}</small></div></div>{selection&&<><code className="map3d-block-state">{selection.blockData}</code><div className="button-row">{canBuild&&editing&&<Button disabled={busy} onClick={()=>{setMaterial(selection.material);setBlockData(selection.blockData);invalidate();}}>{app.t('Взять блок','Pick block')}</Button>}<Button onClick={()=>view.current?.focus(selection.point)}>{app.t('В центр','Focus')}</Button></div></>}</Panel>
-    {canBuild&&editing&&<Panel className="map3d-build-panel"><div className="panel-heading"><h2>{app.t('Инструменты','Tools')}</h2><GameImage id="crafting_table" kind="blocks" size={26}/></div><div className="map3d-tool-grid">{tools.map(tool=><button key={tool.id} disabled={busy} className={mode===tool.id?'active':''} aria-pressed={mode===tool.id} onClick={()=>{setMode(tool.id);changeEditing(true);}}><GameImage id={tool.item} size={23}/><span>{app.t(tool.ru,tool.en)}</span></button>)}</div>
-    {!['remove','copy','paste'].includes(mode)&&<><div className="map-block-current"><GameImage id={material} kind="blocks" size={32}/><span>{assetName(assets,'blocks',material,app.lang)}</span></div><input className="map-block-search" aria-label={app.t('Поиск строительных блоков','Search building blocks')} placeholder={app.t('Блок, например камень…','Search blocks…')} value={search} onChange={e=>setSearch(e.target.value)}/><div className="map-block-picker">{found.map(block=><button key={block.material} disabled={busy||!block.supported} className={material===block.material?'active':''} title={`${assetName(assets,'blocks',block.material,app.lang)}${block.supported?'':` — ${block.reason}`}`} aria-label={`${block.material}${block.supported?'':` — ${block.reason}`}`} onClick={()=>{setMaterial(block.material);setBlockData(block.blockData);invalidate();}}><GameImage id={block.material} kind="blocks" size={32}/>{!block.supported&&<span>×</span>}</button>)}</div>{catalog.loading&&<small className="hint">{app.t('Проверяем допустимые блоки…','Checking supported blocks…')}</small>}{safeBlock&&!safeBlock.supported&&<p className="map3d-limit">{safeBlock.reason}</p>}<details className="map3d-data-details"><summary>{app.t('Точное состояние блока','Exact block state')}</summary><input aria-label="BlockData" value={blockData} maxLength={512} onChange={e=>{setBlockData(e.target.value);invalidate();}}/></details></>}
-    {mode==='paste'&&<div className="map3d-clipboard"><span>{app.t(`В буфере ${history?.clipboard.blocks??0} блоков`,`Clipboard: ${history?.clipboard.blocks??0} blocks`)}</span><select aria-label={app.t('Поворот вставки','Paste rotation')} value={rotation} onChange={e=>{setRotation(Number(e.target.value));invalidate();}}>{[0,90,180,270].map(v=><option key={v} value={v}>{v}°</option>)}</select></div>}
-    {!['place','remove'].includes(mode)&&<><Button disabled={busy} onClick={()=>setExtend(!extend)}>{extend?app.t('Нажмите второй угол','Click the end point'):app.t('Выбрать второй угол','Select end point')}</Button><CoordinateFields label={app.t('Начальная точка','Start point')} value={a??center} disabled={busy} change={p=>{setA(p);setSelection(null);invalidate();}}/>{mode!=='paste'&&<CoordinateFields label={app.t('Второй угол','End point')} value={b??a??center} disabled={busy} change={p=>{setB(p);invalidate();}}/>}{tooLarge&&<p className="map3d-limit">{app.t('Максимум 4096 блоков. Уменьшите выделение.','Maximum 4096 blocks. Reduce the selection.')}</p>}<Button className="primary map3d-preview-button" disabled={!params||busy||!!tooLarge} onClick={()=>void makePreview()}>{mode==='copy'?app.t('Копировать выделение','Copy selection'):app.t('Предпросмотр','Preview')}</Button></>}
-    {preview&&<div className="map3d-preview"><div><strong>{app.t('Изменится блоков','Blocks to change')}</strong><b>{preview.changes}</b></div><small>{coords(preview.bounds.min)} — {coords(preview.bounds.max)}</small><Button className="primary" disabled={busy||!preview.changes} onClick={()=>void apply()}>{app.t('Применить в Minecraft','Apply in Minecraft')}</Button></div>}
-    <p className="map3d-safety-copy">{app.t('Контейнеры и сложные блоки защищены. Недоступные материалы отмечены в палитре. До 4096 блоков за операцию.','Containers and complex blocks are protected. Unsupported materials are marked. Up to 4096 blocks per operation.')}</p></Panel>}
-    {canBuild&&editing&&<Panel className="map3d-history"><div className="button-row"><Button disabled={busy||!history?.undo.length} onClick={()=>void makePreview('undo')}>↶ {app.t('Отменить','Undo')}</Button><Button disabled={busy||!history?.redo.length} onClick={()=>void makePreview('redo')}>↷ {app.t('Повторить','Redo')}</Button></div>{job&&<div className={`map3d-job ${job.status}`} aria-live="polite"><span>{app.t('Выполнение','Progress')}<b>{job.status}</b></span><progress value={terminal.has(job.status)?job.changed:job.progress*job.total} max={Math.max(1,job.total)}/><small>{job.changed}/{job.total} {app.t('блоков','blocks')}</small>{job.message&&<p>{job.message}</p>}</div>}{submittedId&&<div className="map3d-pending"><code>{submittedId}</code><Button disabled={busy} onClick={()=>void recover()}>{app.t('Проверить результат','Check result')}</Button></div>}{history?.undo.slice(-2).reverse().map(h=><div className="map3d-history-entry" key={h.id}><span>{h.operation}<small>{h.world} · {time(h.at)}</small></span><b>{h.blocks}</b></div>)}</Panel>}</aside></div>
-    <div className="map3d-players"><span>{app.t('К игроку','Go to player')}</span>{players.filter(p=>p.online).map(p=><Button key={p.uuid} disabled={busy} onClick={()=>{if(p.world&&typeof p.x==='number'&&typeof p.y==='number'&&typeof p.z==='number')jump(p.world,{x:p.x,y:p.y,z:p.z});}}><GameImage id="player_head" size={22}/>{p.name}</Button>)}</div>
-    <p className="map3d-model-note">{app.t('Обзор показывает все сохранённые регионы, до 2048 файлов. Камера свободно перемещается по миру; подробный ландшафт подгружается по мере движения, до 49 чанков в кадре. Показаны настоящие верхние 12 слоёв поверхности; возле выбранного блока редактор читает точный объём 16³. Новые чанки не генерируются.','Overview shows saved regions, up to 2048 files. The camera can visit any coordinate; detailed terrain streams as you move, up to 49 chunks in view. Actual top 12 surface layers are shown; the editor reads an exact 16³ volume around the selected block. New chunks are never generated.')} {missing>0&&app.t(`${missing} чанков пока не доступны как готовый сохранённый ландшафт.`,`${missing} chunks have no fully generated saved terrain available yet.`)}</p>
+export default function MapPage() {
+  const {t, lang} = useApp(), live = useLive(), assets = useAssets();
+  const worlds = live.snapshot?.worlds ?? [], [worldName, setWorldName] = useState('');
+  const world = worlds.find(w => w.name === worldName) ?? worlds[0];
+  const canvas = useRef<HTMLCanvasElement>(null), view = useRef<IsometricMap | null>(null);
+  const [center, setCenter] = useState<Point>({x: 0, y: 64, z: 0}), [zoom, setZoom] = useState(INITIAL_ZOOM);
+  const [viewport, setViewport] = useState<Viewport>({cx: 0, cz: 0, radius: 2, step: 1});
+  const [cache, setCache] = useState<{world: string; tiles: SurfaceTile[]}>({world: '', tiles: []});
+  const [loading, setLoading] = useState(true), [pending, setPending] = useState(false), [error, setError] = useState('');
+  const [revision, setRevision] = useState(0), [hover, setHover] = useState<SurfaceCell | null>(null), [selected, setSelected] = useState<SurfaceCell | null>(null);
+  const [draft, setDraft] = useState({x: '0', z: '0'});
+  const index = useResource<WorldIndex>(world ? '/api/map/index?world=' + encodeURIComponent(world.name) : null);
+  const lastWorld = useRef('');
+
+  useEffect(() => {
+    if (!canvas.current) return;
+    const instance = new IsometricMap(canvas.current, {
+      onView: (point, scale, next) => {
+        setCenter(point); setZoom(scale);
+        setViewport(previous => previous.cx === next.cx && previous.cz === next.cz && previous.radius === next.radius ? previous : next);
+      }, onHover: setHover, onSelect: setSelected
+    });
+    view.current = instance;
+    return () => {instance.dispose(); view.current = null; lastWorld.current = '';};
+  }, []);
+  useEffect(() => {
+    if (!world || lastWorld.current === world.name) return;
+    lastWorld.current = world.name;
+    const point = {x: world.spawn.x, y: world.spawn.y, z: world.spawn.z};
+    view.current?.clear(world.name); view.current?.setCenter(point, true);
+    setCenter(point); setZoom(INITIAL_ZOOM); setDraft({x: String(Math.floor(point.x)), z: String(Math.floor(point.z))});
+    setSelected(null); setHover(null); setCache({world: world.name, tiles: []}); setError(''); setLoading(true);
+    const rect = canvas.current?.getBoundingClientRect();
+    setViewport(viewportFor(point, rect?.width ?? 800, rect?.height ?? 580, INITIAL_ZOOM));
+  }, [world]);
+  useEffect(() => {view.current?.setAssets(assets);}, [assets]);
+
+  // Requests are scoped to the visible chunk window and stop when hidden.
+  useEffect(() => {
+    if (!world) return;
+    const name = world.name, expected = viewportFor(center, canvas.current?.clientWidth ?? 800, canvas.current?.clientHeight ?? 580, zoom);
+    if (expected.cx !== viewport.cx || expected.cz !== viewport.cz) return;
+    setLoading(true); setPending(false); setError('');
+    let active = true, timer = 0, controller: AbortController | null = null, attempts = 0;
+    const schedule = (ms: number) => {clearTimeout(timer); if (active && !document.hidden) timer = window.setTimeout(load, ms);};
+    async function load() {
+      if (!active || document.hidden) return;
+      controller?.abort(); controller = new AbortController();
+      const current = controller, deadline = window.setTimeout(() => current.abort(), 20000);
+      setLoading(true);
+      try {
+        const query = new URLSearchParams({world: name, cx: String(viewport.cx), cz: String(viewport.cz), radius: String(viewport.radius), step: '1'});
+        const data = await request<Terrain>('/api/map/terrain?' + query, {signal: current.signal});
+        if (!active || current.signal.aborted) return;
+        setLoading(false); setError(''); setPending(data.pending);
+        setCache(previous => ({world: name, tiles: mergeSurfaceTiles(previous.world, previous.tiles, name, data.tiles, viewport)}));
+        if (data.pending && ++attempts < 16) schedule(1800); else schedule(120000);
+      } catch (reason) {
+        if (active && !document.hidden) {setLoading(false); setPending(false); setError(detail(reason));}
+      } finally {clearTimeout(deadline);}
+    }
+    const visibility = () => {clearTimeout(timer); if (document.hidden) controller?.abort(); else {attempts = 0; schedule(250);}};
+    document.addEventListener('visibilitychange', visibility); schedule(250);
+    return () => {active = false; clearTimeout(timer); controller?.abort(); document.removeEventListener('visibilitychange', visibility);};
+    // Moving inside one chunk only repaints the cached image.
+  }, [world?.name, viewport, revision]);
+
+  const tiles = useMemo(() => cache.world === world?.name ? cache.tiles.filter(tile => Math.abs(tile.cx - viewport.cx) <= viewport.radius && Math.abs(tile.cz - viewport.cz) <= viewport.radius) : [], [cache, world?.name, viewport]);
+  useEffect(() => {view.current?.setTerrain(tiles, world?.name ?? '');}, [tiles, world?.name]);
+  const players = live.players.filter(p => p.online && p.world === world?.name && typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number');
+  useEffect(() => {
+    view.current?.setMarkers(world ? [{...world.spawn, id: 'spawn', name: 'Spawn', spawn: true}, ...players.map(p => ({id: p.uuid, name: p.name, x: p.x!, y: p.y!, z: p.z!}))] : []);
+  }, [world, players]);
+  const jump = useCallback((x: number, z: number, y?: number) => {
+    const point = {x: Math.max(-29999840, Math.min(29999840, x)), y: y ?? world?.spawn.y ?? 64, z: Math.max(-29999840, Math.min(29999840, z))};
+    view.current?.setCenter(point, false, y === undefined); setDraft({x: String(Math.floor(point.x)), z: String(Math.floor(point.z))});
+  }, [world?.spawn.y]);
+  const ready = tiles.filter(tile => tile.status === 'ready').length, point = selected ?? hover;
+  const tileFailure = tiles.find(tile => tile.status === 'error' || tile.refreshStatus === 'error');
+  const mapError = error || (tileFailure ? t('Не удалось загрузить участок карты. Повторите попытку.', 'A map area could not be loaded. Please try again.') : '');
+  const deferred = tiles.some(tile => tile.status === 'deferred' || tile.refreshStatus === 'deferred');
+  const worldItem = world?.environment === 'NETHER' ? 'netherrack' : world?.environment === 'THE_END' ? 'end_stone' : 'grass_block';
+
+  return <div className="iso-map-page">
+    <header className="page-heading"><div><span className="eyebrow">{t('Твой мир', 'Your world')}</span><h1>{t('Карта мира', 'World map')}</h1><p>{t('Знакомые места. Новые маршруты.', 'Familiar places. New paths.')}</p></div><span className="iso-map-view-label"><span/>{t('Изометрия', 'Isometric view')}</span></header>
+    <div className="iso-map-toolbar">
+      <label className="iso-map-world"><GameImage kind="blocks" id={worldItem} size={28}/><span className="sr-only">{t('Мир', 'World')}</span><select value={world?.name ?? ''} onChange={e => setWorldName(e.target.value)}>{worlds.map(w => <option key={w.uuid} value={w.name}>{w.name}</option>)}</select></label>
+      <form className="iso-map-coordinates" onSubmit={e => {e.preventDefault(); const x = Number(draft.x), z = Number(draft.z); if (draft.x.trim() && draft.z.trim() && Number.isFinite(x) && Number.isFinite(z)) jump(x, z);}}>
+        {(['x', 'z'] as const).map(axis => <label key={axis}><span>{axis.toUpperCase()}</span><input type="number" required step="1" min={-29999840} max={29999840} aria-label={t('Координата', 'Coordinate') + ' ' + axis.toUpperCase()} value={draft[axis]} onChange={e => setDraft({...draft, [axis]: e.target.value})}/></label>)}
+        <Button type="submit" disabled={!world}>{t('Перейти', 'Go')}</Button>
+      </form>
+      <div className="iso-map-toolbar-actions"><Button disabled={!world} onClick={() => world && jump(world.spawn.x, world.spawn.z, world.spawn.y)}><GameImage kind="items" id="compass" size={20}/>{t('Спавн', 'Spawn')}</Button><Button aria-label={t('Обновить карту', 'Refresh map')} title={t('Обновить карту', 'Refresh map')} onClick={() => setRevision(n => n + 1)} disabled={!world || loading}><Icon name="refresh"/></Button></div>
+    </div>
+    {mapError && <ErrorBox error={mapError} retry={() => setRevision(n => n + 1)}/>}
+    <div className="iso-map-layout">
+      <section className="iso-map-stage" data-smooth-scroll="off" aria-label={t('Карта', 'Map')}>
+        <canvas ref={canvas} tabIndex={0} role="img" aria-label={t('Изометрическая карта поверхности мира', 'Isometric world surface map')} aria-describedby="iso-map-help"/>
+        <div className="iso-map-location"><span>{world?.name ?? t('Загрузка мира…', 'Loading world…')}</span><strong>X {formatNumber(Math.floor(center.x))}<i/>Z {formatNumber(Math.floor(center.z))}</strong></div>
+        <div className="iso-map-compass" aria-hidden="true"><span>N</span><b>↖</b><span>E ↗</span></div>
+        {!ready && <div className="iso-map-empty" role="status"><GameImage kind="items" id="filled_map" size={48}/><h2>{mapError ? t('Участок недоступен', 'Area unavailable') : deferred ? t('Сервер занят', 'Server is busy') : loading || pending ? t('Открываем местность…', 'Opening terrain…') : t('Здесь пока нет карты', 'No map here yet')}</h2><p>{mapError ? t('Повторите загрузку или вернитесь к спавну.', 'Retry loading or return to spawn.') : deferred ? t('Загрузка продолжится, когда сервер освободится.', 'Loading will resume when the server is available.') : loading || pending ? t('Загружаем сохранённые участки мира.', 'Loading saved parts of the world.') : t('Эта область ещё не сохранена. Вернитесь к спавну или выберите другой участок.', 'This area has not been saved yet. Return to spawn or choose another area.')}</p>{!loading && !pending && <Button disabled={!world} onClick={() => world && jump(world.spawn.x, world.spawn.z, world.spawn.y)}>{t('К спавну', 'Return to spawn')}</Button>}</div>}
+        <div className="iso-map-controls"><div className="iso-map-zoom"><Button aria-label={t('Приблизить', 'Zoom in')} onClick={() => view.current?.zoomBy(1.25)}>+</Button><span>{Math.round(zoom * 100)}%</span><Button aria-label={t('Отдалить', 'Zoom out')} onClick={() => view.current?.zoomBy(.8)}>−</Button></div><div className="iso-map-pan">{([{label: t('Вверх', 'Up'), glyph: '↑', delta: [-8, -8]}, {label: t('Влево', 'Left'), glyph: '←', delta: [-8, 8]}, {label: t('Вправо', 'Right'), glyph: '→', delta: [8, -8]}, {label: t('Вниз', 'Down'), glyph: '↓', delta: [8, 8]}]).map(({label, glyph, delta}) => <Button key={glyph} aria-label={label} onClick={() => view.current?.pan(delta[0], delta[1])}>{glyph}</Button>)}</div></div>
+        <div className="iso-map-status"><span className={loading || pending ? 'is-loading' : ''}/>{mapError ? t('Участок недоступен', 'Area unavailable') : deferred ? t('Сервер занят · загрузка отложена', 'Server busy · loading deferred') : loading || pending ? t('Подгружаем участки', 'Loading areas') : ready ? t('Местность загружена', 'Terrain loaded') : t('Нет карты участка', 'No map data here')}</div>
+      </section>
+      <aside className="iso-map-sidebar">
+        <WorldOverview index={index.data} cx={viewport.cx} cz={viewport.cz} jump={jump} t={t}/>
+        {index.error && <ErrorBox error={index.error} retry={index.reload}/>}
+        <section className="iso-map-panel"><div className="iso-map-panel-heading"><h3>{t('На карте', 'On the map')}</h3><span>{players.length} {t('в игре', 'online')}</span></div><button className="iso-map-marker" disabled={!world} onClick={() => world && jump(world.spawn.x, world.spawn.z, world.spawn.y)}><GameImage kind="items" id="compass" size={28}/><span><strong>{t('Точка появления', 'World spawn')}</strong><small>{world ? coordinates(world.spawn) : '—'}</small></span><Icon name="arrow" size={16}/></button>{players.map(player => <button key={player.uuid} className="iso-map-marker" onClick={() => jump(player.x!, player.z!, player.y!)}><span className="iso-map-player-dot"/><span><strong>{player.name}</strong><small>{coordinates({x: player.x!, y: player.y!, z: player.z!})}</small></span><Icon name="arrow" size={16}/></button>)}{!players.length && <p>{t('Игроков в этом мире пока нет.', 'No players in this world yet.')}</p>}</section>
+        <section className="iso-map-panel iso-map-point"><div className="iso-map-panel-heading"><h3>{t('Местность', 'Terrain')}</h3><span>{selected ? t('Выбрано', 'Selected') : t('Обзор', 'Explore')}</span></div>{point ? <div className="iso-map-point-detail"><GameImage kind="blocks" id={point.material} size={36}/><div><strong>{assetName(assets, 'blocks', point.material, lang)}</strong><p>{coordinates(point)}</p></div></div> : <p>{t('Наведите курсор или нажмите на участок, чтобы узнать его высоту.', 'Hover or select a surface to see its elevation.')}</p>}</section>
+      </aside>
+    </div>
+    <footer className="iso-map-footer"><p id="iso-map-help">{t('Перетаскивание — перемещение · Колесо или + / − — масштаб · Стрелки — движение', 'Drag to move · Wheel or + / − to zoom · Arrow keys to pan')}</p><span><i className="spawn"/>{t('Спавн', 'Spawn')}<i/>{t('Игроки', 'Players')}</span></footer>
   </div>;
 }
-
