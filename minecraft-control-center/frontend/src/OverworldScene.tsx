@@ -1,13 +1,14 @@
 import {useEffect, useId, useRef, useState} from 'react';
 import type * as Three from 'three';
 import './overworld-scene.css';
+import {createOverworldTerrain, OVERWORLD_BLOCK_SIZE, type VoxelBlock} from './overworld-terrain';
 
 type SceneController = {
   setActivity: (visible: boolean, reduced: boolean) => void;
   resize: () => void;
   dispose: () => void;
 };
-type Block = {x: number; y: number; z: number; scale?: [number, number, number]; tint?: number};
+type Block = VoxelBlock;
 
 const vertexShader = `
   varying vec2 vUv;
@@ -217,7 +218,7 @@ function createOverworld(
 
     const cube = geometry(new T.BoxGeometry(1, 1, 1));
     const plane = geometry(new T.PlaneGeometry(1, 1));
-    const unit = 0.7;
+    const unit = OVERWORLD_BLOCK_SIZE;
     function blocks(data: Block[], mats: Three.Material | Three.Material[], parent: Three.Object3D = world) {
       const mesh = new T.InstancedMesh(cube, mats, data.length);
       instances.add(mesh);
@@ -243,26 +244,8 @@ function createOverworld(
     const stone = surface('stone', '#789094');
     const deepStone = surface('stone', '#53646e');
     const moss = surface('moss_block', '#679675');
-    const top: Block[] = [];
-    const soil: Block[] = [];
-    const rock: Block[] = [];
-    const deep: Block[] = [];
-
     // Regular voxel strata make a readable landform, with a cutaway facing the camera.
-    for (let x = -6; x <= 6; x++) {
-      for (let z = -4; z <= 4; z++) {
-        const contour = (x / 6.0) ** 2 + (z / 4.3) ** 2;
-        if (contour > 1 || (x < -4 && z > 2) || (x > 4 && z < -2)) continue;
-        const shade = 0.9 + ((x * 7 + z * 11 + 99) % 5) * 0.024;
-        const river = x === 0 && z >= -1;
-        top.push({x: x * unit, y: river ? -0.17 : 0, z: z * unit, tint: shade});
-        soil.push({x: x * unit, y: -0.7, z: z * unit, tint: shade});
-        if (contour < 0.86) rock.push({x: x * unit, y: -1.4, z: z * unit, tint: shade});
-        if (contour < 0.66) rock.push({x: x * unit, y: -2.1, z: z * unit, tint: shade * 0.95});
-        if (contour < 0.41) deep.push({x: x * unit, y: -2.8, z: z * unit, tint: shade});
-        if (contour < 0.16 && x !== 1) deep.push({x: x * unit, y: -3.5, z: z * unit, tint: shade});
-      }
-    }
+    const {top, soil, rock, deep} = createOverworldTerrain();
     blocks(top, [grassSide, grassSide, grassTop, dirt, grassSide, grassSide]);
     blocks(soil, dirt);
     blocks(rock, stone);
