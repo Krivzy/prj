@@ -28,7 +28,7 @@ npm run build --prefix frontend
 
 ## Проверки и границы
 
-TypeScript/Vite build, 36 Node tests, 65 JUnit tests и OneJAR distribution verification прошли. Проверены 13 страниц × 1440/768/390 px, owner/viewer, login/error states, focus traps, Escape, command navigation, отмена подтверждения, reduced motion, offscreen pause и реальная потеря WebGL context. Сцена ограничена 30 renders/sec и DPR 1.5; это ограничения renderer, а не измеренный FPS на любом устройстве.
+TypeScript/Vite build, 37 Node tests, 65 JUnit tests и OneJAR distribution verification прошли. Проверены 13 страниц × 1440/768/390 px, owner/viewer, login/error states, focus traps, Escape, command navigation, отмена подтверждения, reduced motion, offscreen pause и реальная потеря WebGL context. Сцена ограничена 30 renders/sec и DPR 1.5; это ограничения renderer, а не измеренный FPS на любом устройстве.
 
 Скриншоты браузерной матрицы сняты с изолированными фиктивными API данными. Отдельный native smoke проверяет настоящий Paper, auth и WebSocket; изменения миров и длительный soak в рамках visual redesign не выполняются. Three.js загружается лениво; Vite сообщает о крупном Three chunk и служебных `use client` directives upstream dependencies. 21st.dev/Figma/Context7 connector auth не использовалась как зависимость этой реализации.
 
@@ -37,3 +37,7 @@ TypeScript/Vite build, 36 Node tests, 65 JUnit tests и OneJAR distribution veri
 ## Исправление мерцания травы
 
 Блоки травы в русле уменьшены по высоте: нижняя грань совпадает с верхом земли, поверхность русла и вода сохраняют прежний уровень. Пересечения геометрии, вызывавшие z-fighting при анимации, устранены. Два regression tests проверяют все слои острова и границу русла; анимация проверена в браузере.
+
+## Открытый выход водопада
+
+Удалены ровно два блока у выхода русла: трава и земля, через которые проходила вертикальная вода. Пять внутренних блоков русла и остальная геометрия сохранены. Regression test проверяет отсутствие твёрдых блоков на пути водопада.

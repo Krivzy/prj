@@ -8,7 +8,7 @@ export type VoxelBlock = {
 
 export const OVERWORLD_BLOCK_SIZE = 0.7;
 
-/** Build disjoint voxel strata; recess the river surface without burying grass in soil. */
+/** Build disjoint voxel strata and leave the waterfall outlet open. */
 export function createOverworldTerrain() {
   const unit = OVERWORLD_BLOCK_SIZE;
   const riverDepth = 0.17;
@@ -21,6 +21,8 @@ export function createOverworldTerrain() {
     for (let z = -4; z <= 4; z++) {
       const contour = (x / 6.0) ** 2 + (z / 4.3) ** 2;
       if (contour > 1 || (x < -4 && z > 2) || (x > 4 && z < -2)) continue;
+      // No grass or soil at the front outlet: the waterfall passes through this column.
+      if (x === 0 && z === 4) continue;
       const shade = 0.9 + ((x * 7 + z * 11 + 99) % 5) * 0.024;
       const river = x === 0 && z >= -1;
       // The lower face remains at -unit/2, flush with the unchanged soil layer.

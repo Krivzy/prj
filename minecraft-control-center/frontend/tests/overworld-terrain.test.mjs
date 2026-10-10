@@ -37,3 +37,18 @@ test('Recessed river keeps its surface height and meets the unchanged soil witho
     assert.equal(grass.scale, undefined, 'The other turf blocks retain their full size');
   }
 });
+
+test('The waterfall passes through an open outlet without grass or soil in its path', () => {
+  const terrain = createOverworldTerrain();
+  const waterfall = {xMin: -0.32, xMax: 0.32, yMin: -3.13, yMax: 0.25, z: 2.82};
+  for (const block of Object.values(terrain).flat()) {
+    const [width, height, depth] = block.scale ?? Array(3).fill(OVERWORLD_BLOCK_SIZE);
+    const coversFall = block.x - width / 2 < waterfall.xMax && block.x + width / 2 > waterfall.xMin
+      && block.y - height / 2 < waterfall.yMax && block.y + height / 2 > waterfall.yMin
+      && block.z - depth / 2 < waterfall.z && block.z + depth / 2 > waterfall.z;
+    assert(!coversFall, `Solid voxel at ${block.x},${block.y},${block.z} blocks the waterfall`);
+  }
+  assert(!terrain.top.some(block => block.x === 0 && block.z === 4 * OVERWORLD_BLOCK_SIZE));
+  assert(!terrain.soil.some(block => block.x === 0 && block.z === 4 * OVERWORLD_BLOCK_SIZE));
+  assert(terrain.top.some(block => block.x === 0 && block.z === 3 * OVERWORLD_BLOCK_SIZE), 'Keep the upstream riverbed');
+});
