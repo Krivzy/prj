@@ -1,0 +1,3 @@
+# Merge this setting at the top level of your existing config.toml.
+# Reserve room for global persistence rules and project instructions.
+project_doc_max_bytes = 65536
