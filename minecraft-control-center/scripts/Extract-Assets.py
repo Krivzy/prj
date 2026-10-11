@@ -1,6 +1,7 @@
 """Copy unmodified game textures and derive UI metadata from the user's installed client."""
 import argparse, hashlib, json, struct, zipfile
 from pathlib import Path
+from asset_head_uv import ghast_head
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description="Extract UI textures from your legally installed Minecraft 26.3 client and verified local language cache.")
@@ -141,8 +142,8 @@ with zipfile.ZipFile(CLIENT) as archive:
     for entity, path in base_heads.items():
         source = 'assets/minecraft/textures/entity/' + path + '.png'
         w, h = struct.unpack('>II', archive.read(source)[16:24])
-        x,y,width,height = (16,16,16,16) if entity == 'ghast' else (8,8,8,12 if entity == 'illusioner' else 8)
-        mobs['minecraft:' + entity] = {'image':'/game-assets/textures/entity/' + path + '.png','head':{'x':x,'y':y,'width':width,'height':height,'atlasWidth':w,'atlasHeight':h}}
+        head = ghast_head(w, h) if entity == 'ghast' else {'x':8,'y':8,'width':8,'height':12 if entity == 'illusioner' else 8,'atlasWidth':w,'atlasHeight':h}
+        mobs['minecraft:' + entity] = {'image':'/game-assets/textures/entity/' + path + '.png','head':head}
     mobs['minecraft:armor_stand'] = dict(items['minecraft:armor_stand'])
     mobs['minecraft:mushroom_cow'] = dict(mobs['minecraft:mooshroom'])
     heads = {'creeper_head':'entity/creeper/creeper','piglin_head':'entity/piglin/piglin','player_head':'entity/player/wide/steve','skeleton_skull':'entity/skeleton/skeleton','wither_skeleton_skull':'entity/skeleton/wither_skeleton','zombie_head':'entity/zombie/zombie'}
@@ -181,9 +182,8 @@ with zipfile.ZipFile(CLIENT) as archive:
         labels[lang[:2]] = {}
         for kind, category, prefix in [('items', items, 'item'),('blocks',blocks,'block'),('mobs',mobs,'entity'),('effects',effects,'effect'),('enchantments',enchantments,'enchantment')]:
             labels[lang[:2]][kind] = {key:table.get(prefix + '.' + key.replace(':','.'),table.get('block.' + key.replace(':','.'),key.split(':')[-1].replace('_',' '))) for key in category}
-    manifest = {'version': '26.3', 'sourceSha1': EXPECTED, 'items': items, 'blocks': blocks, 'mobs': mobs, 'effects': effects, 'enchantments': enchantments, 'names':labels, 'art': {}}
+    manifest = {'version': '26.3', 'sourceSha1': EXPECTED, 'items': items, 'blocks': blocks, 'mobs': mobs, 'effects': effects, 'enchantments': enchantments, 'names':labels, 'art': {'hero': '/game-assets/art/hero.png'}}
     (OUT / 'catalog.json').write_text(json.dumps(manifest, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
     report = {'clientVersion': '26.3', 'clientSha1': EXPECTED, 'assetIndexSha1': metadata['assetIndex']['sha1'], 'russianLanguageSha1': language_entry['hash'], 'unmodifiedTextures': copied, 'itemIcons': len(items), 'blockIcons': len(blocks), 'effectIcons': len(effects), 'enchantmentIcons': len(enchantments), 'mobTextureEntries': len(mobs), 'missingSpecialItemModels': missing}
-    (ROOT / 'docs').mkdir(exist_ok=True)
     (ROOT / 'docs/ASSET-REPORT.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     print(json.dumps({k:v for k,v in report.items() if k != 'missingSpecialItemModels'}))

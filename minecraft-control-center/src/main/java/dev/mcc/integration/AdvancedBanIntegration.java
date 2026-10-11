@@ -2,17 +2,23 @@ package dev.mcc.integration;
 
 import java.util.*;
 
-/** Official AdvancedBan 2 public API. The provider remains the sole enforcement owner. */
+/** AdvancedBan/AdvancedBanZ public API. The provider remains the sole enforcement owner. */
 final class AdvancedBanIntegration {
     private final IntegrationService.Binding binding;
     private final Object manager,uuidManager,time;
     private final Class<?> punishment,type;
-    AdvancedBanIntegration(IntegrationService.Binding binding)throws Exception {this.binding=binding;manager=binding.api();uuidManager=PublicApi.call(PublicApi.type(binding.loader(),"me.leoko.advancedban.manager.UUIDManager"),"get");time=PublicApi.type(binding.loader(),"me.leoko.advancedban.manager.TimeManager");punishment=PublicApi.type(binding.loader(),"me.leoko.advancedban.utils.Punishment");type=PublicApi.type(binding.loader(),"me.leoko.advancedban.utils.PunishmentType");}
-    static void validate(Object manager,ClassLoader loader)throws Exception {
-        Class<?> type=PublicApi.type(loader,"me.leoko.advancedban.utils.PunishmentType"),punishment=PublicApi.type(loader,"me.leoko.advancedban.utils.Punishment");
+    AdvancedBanIntegration(IntegrationService.Binding binding)throws Exception {this.binding=binding;String namespace=PunishmentProviders.namespace(binding.title());manager=binding.api();uuidManager=PublicApi.call(PublicApi.type(binding.loader(),namespace+".manager.UUIDManager"),"get");time=PublicApi.type(binding.loader(),namespace+".manager.TimeManager");punishment=PublicApi.type(binding.loader(),namespace+".utils.Punishment");type=PublicApi.type(binding.loader(),namespace+".utils.PunishmentType");}
+    static void validate(Object manager,ClassLoader loader,String name)throws Exception {validateTypes(manager.getClass(),loader,PunishmentProviders.namespace(name));}
+    /** Signature inspection also permits offline JAR verification without initializing the provider. */
+    static void validateTypes(Class<?> manager,ClassLoader loader,String namespace)throws Exception {
+        if(PunishmentProviders.known().stream().noneMatch(p->p.supported()&&p.namespace().equals(namespace)))throw new UnsupportedOperationException("Unknown punishment API namespace");
+        Class<?> type=PublicApi.type(loader,namespace+".utils.PunishmentType"),punishment=PublicApi.type(loader,namespace+".utils.Punishment");
         punishment.getConstructor(String.class,String.class,String.class,String.class,type,long.class,long.class,String.class,int.class);
-        if(!type.isEnum()||!PublicApi.has(manager,"getPunishments",3)||!PublicApi.has(manager,"getPunishment",1)||!PublicApi.has(punishment,"create",1)||!PublicApi.has(punishment,"delete",3))throw new UnsupportedOperationException();
-        Class<?> uuid=PublicApi.type(loader,"me.leoko.advancedban.manager.UUIDManager");uuid.getMethod("getMode");uuid.getMethod("getInMemoryUUID",String.class);PublicApi.type(loader,"me.leoko.advancedban.manager.TimeManager").getMethod("getTime");
+        if(!type.isEnum()||!Collection.class.isAssignableFrom(manager.getMethod("getPunishments",String.class,type,boolean.class).getReturnType())||!punishment.isAssignableFrom(manager.getMethod("getPunishment",int.class).getReturnType()))throw new UnsupportedOperationException();
+        punishment.getMethod("create",boolean.class);punishment.getMethod("delete",String.class,boolean.class,boolean.class);
+        for(String getter:List.of("Id","Name","Reason","Operator","Start","End","Type","Uuid"))punishment.getMethod("get"+getter);
+        punishment.getMethod("isExpired");
+        Class<?> uuid=PublicApi.type(loader,namespace+".manager.UUIDManager");uuid.getMethod("get");uuid.getMethod("getMode");uuid.getMethod("getInMemoryUUID",String.class);PublicApi.type(loader,namespace+".manager.TimeManager").getMethod("getTime");
     }
     private String target(Map<String,Object> body)throws Exception {
         String name=IntegrationValidation.player(body,"player");UUID uuid=IntegrationValidation.uuid(IntegrationValidation.text(body,"uuid","",36));String mode=String.valueOf(PublicApi.call(uuidManager,"getMode"));

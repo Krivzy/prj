@@ -10,7 +10,7 @@ export const pages: {id: Page; ru: string; en: string; group: number}[] = [
   {id:'ores', ru:'Честная игра', en:'Fair play', group:0},
   {id:'luckperms', ru:'LuckPerms', en:'LuckPerms', group:1},
   {id:'coreprotect', ru:'CoreProtect', en:'CoreProtect', group:1},
-  {id:'advancedban', ru:'AdvancedBan', en:'AdvancedBan', group:1},
+  {id:'advancedban', ru:'Наказания', en:'Punishments', group:1},
   {id:'console', ru:'Консоль', en:'Console', group:1},
   {id:'chat', ru:'Чат', en:'Chat', group:1},
   {id:'automations', ru:'Автоматизации', en:'Automations', group:1},

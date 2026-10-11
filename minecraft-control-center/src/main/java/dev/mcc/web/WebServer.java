@@ -210,7 +210,7 @@ public final class WebServer implements AutoCloseable {
         if(action.equals("player.unmute")||action.equals("player.unban"))return plugin.punishments().revokeType(id,action.endsWith("unmute")?"mute":"ban",s.name()).thenApply(value->value);
         Map<String,Object> values=punishmentBody(params);values.put("type",action.substring("player.".length()));return plugin.punishments().create(values,s.name()).thenApply(value->value);
     }
-    private void builtinModeration(){if(plugin.integrations().externalPunishments().getAsBoolean())throw new IllegalStateException("Наказаниями управляет AdvancedBan. Откройте вкладку AdvancedBan; встроенные наказания MCC отключены.");}
+    private void builtinModeration(){if(plugin.integrations().externalPunishments().getAsBoolean())throw new IllegalStateException("Наказаниями управляет внешний плагин. Откройте управление наказаниями, чтобы проверить доступность интеграции; встроенные наказания MCC отключены.");}
     private Object tracked(String operation,Map<String,Object> body,Auth.Session s,Supplier<CompletableFuture<Object>> start)throws Exception{
         String id=Json.text(body,"id",UUID.randomUUID().toString());UUID.fromString(id);long now=System.currentTimeMillis();
         requests.entrySet().removeIf(entry->now-entry.getValue().created()>600000&&entry.getValue().result().isDone());if(requests.size()>=1024)throw new IllegalStateException("Action queue is full");

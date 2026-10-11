@@ -51,7 +51,7 @@ public final class PunishmentEngine implements Listener,AutoCloseable {
     public PunishmentEngine(Database db,Enforcement enforcement,BiConsumer<String,Object> events,Clock clock){this.db=Objects.requireNonNull(db);this.enforcement=Objects.requireNonNull(enforcement);this.events=Objects.requireNonNull(events);this.clock=Objects.requireNonNull(clock);this.plugin=null;this.main=null;}
     public void externalManaged(BooleanSupplier supplier) { externalManaged = Objects.requireNonNull(supplier); }
     private boolean externallyManaged() { try { return externalManaged.getAsBoolean(); } catch (RuntimeException error) { return true; } }
-    private void requireNative() { if (closed.get()) throw new IllegalStateException("Punishments are unavailable"); if (externallyManaged()) throw new IllegalStateException("Наказания управляются AdvancedBan; native действие MCC отключено"); }
+    private void requireNative() { if (closed.get()) throw new IllegalStateException("Punishments are unavailable"); if (externallyManaged()) throw new IllegalStateException("Наказания управляются внешним плагином; встроенное действие MCC отключено"); }
     private CompletableFuture<Map<String,Object>> applyNative(Database.Punishment row, boolean restoring) { try { requireNative(); return enforcement.apply(row, restoring); } catch (RuntimeException error) { return CompletableFuture.failedFuture(error); } }
     private CompletableFuture<Void> removeNative(Database.Punishment row) { try { requireNative(); return enforcement.remove(row); } catch (RuntimeException error) { return CompletableFuture.failedFuture(error); } }
     private CompletableFuture<Void> restoreNative(Database.Punishment row) {

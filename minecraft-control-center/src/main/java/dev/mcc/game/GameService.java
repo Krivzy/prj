@@ -301,7 +301,7 @@ public final class GameService implements Listener, AutoCloseable {
     }
 
     private Object playerAction(String action, Map<String, Object> p) {
-        if (externallyManaged() && Set.of("player.mute", "player.unmute", "player.ban", "player.unban", "player.kick", "player.ipban", "player.ban_ip", "player.unban_ip").contains(action)) throw new IllegalStateException("Наказания управляются AdvancedBan; native действие MCC отключено");
+        if (externallyManaged() && Set.of("player.mute", "player.unmute", "player.ban", "player.unban", "player.kick", "player.ipban", "player.ban_ip", "player.unban_ip").contains(action)) throw new IllegalStateException("Наказания управляются внешним плагином; встроенное действие MCC отключено");
         if (action.equals("player.unban_ip")) {
             java.net.InetAddress address;
             try { address = java.net.InetAddress.ofLiteral(string(p, "address", 64)); } catch (IllegalArgumentException ex) { throw new IllegalArgumentException("Требуется IP literal, не hostname"); }

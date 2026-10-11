@@ -76,7 +76,7 @@ The standalone React/Vite `KernelProfiles` component can be embedded in the exis
 
 ## Verified checks
 
-The assembled Gradle test XML on 2026-10-11 records 25 profile/config/public-distance unit tests (16 profile, 5 config, 4 distance) plus 7 restart tests, with zero failures, errors or skipped tests. The whole Java suite records 205 passing tests. Profile regressions cover default/custom byte preservation, per-world merges, source conflicts, actor/TTL/authority, exact rollback on Owner loss, unknown schemas/kernels, Spigot without setters, visible live failure, late-startup drift, offline prelaunch lease/identity, typed YAML hazards and partial live rollback. Three Node helper tests and `tsc -b` passed. No preset was applied to production and no benchmark/native kernel preset claim is made by these checks.
+The assembled Gradle test XML on 2026-10-11 records 25 profile/config/public-distance unit tests (16 profile, 5 config, 4 distance) plus 7 restart tests, with zero failures, errors or skipped tests. The whole Java suite records 215 passing tests. Profile regressions cover default/custom byte preservation, per-world merges, source conflicts, actor/TTL/authority, exact rollback on Owner loss, unknown schemas/kernels, Spigot without setters, visible live failure, late-startup drift, offline prelaunch lease/identity, typed YAML hazards and partial live rollback. Three Node helper tests and `tsc -b` passed. No preset was applied to production and no benchmark/native kernel preset claim is made by these checks.
 
 ## Primary references
 
