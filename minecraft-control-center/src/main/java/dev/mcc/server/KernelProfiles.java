@@ -27,10 +27,10 @@ public final class KernelProfiles implements AutoCloseable {
         CompletableFuture<List<Map<String,Object>>> applyDistances(int view,int simulation,BooleanSupplier authority);
     }
     public enum Profile {
-        CUSTOM("custom",0,0), VANILLA("vanilla",10,10), VANILLA_PERFORMANCE("vanilla-performance",10,8), OPTIMIZED("optimized",8,6), MAXIMUM_OPTIMIZED("maximum-optimized",0,0);
+        CUSTOM("custom",0,0), VANILLA("vanilla",10,10), VANILLA_PERFORMANCE("vanilla-performance",10,8), VANILLA_THROUGHPUT("vanilla-throughput",0,0), OPTIMIZED("optimized",8,6), MAXIMUM_OPTIMIZED("maximum-optimized",0,0);
         final String id;final int view,simulation;
         Profile(String id,int view,int simulation){this.id=id;this.view=view;this.simulation=simulation;}
-        boolean preservesDistances(){return this==CUSTOM||this==MAXIMUM_OPTIMIZED;}
+        boolean preservesDistances(){return this==CUSTOM||this==VANILLA_THROUGHPUT||this==MAXIMUM_OPTIMIZED;}
         static Profile parse(String id){for(Profile p:values())if(p.id.equals(id))return p;throw new IllegalArgumentException("Unknown kernel profile");}
     }
     private record Target(String relative,KernelConfigFiles.Kind kind,List<KernelConfigFiles.Edit> edits) {}
@@ -118,11 +118,12 @@ public final class KernelProfiles implements AutoCloseable {
         boolean supported=knownKernel(snapshot.kernel);String reason="";List<Map<String,Object>> files=new ArrayList<>();
         if(supported){try{for(Target target:targets(root,snapshot,Profile.VANILLA)){Path file=resolve(root,target.relative);byte[] bytes=bounded(file,KernelConfigFiles.MAX_BYTES);KernelConfigFiles.merge(target.kind,bytes,target.edits);files.add(map("path",target.relative,"sha256",sha(bytes)));}}catch(IOException|IllegalArgumentException e){supported=false;reason=e.getMessage();}}
         else reason="Unknown or unsupported kernel; custom/files mode is preserved";
-        List<Map<String,Object>> profiles=new ArrayList<>();for(Profile p:Profile.values())profiles.add(map("id",p.id,"available",p==Profile.CUSTOM||supported,"managed",p!=Profile.CUSTOM,"viewDistance",p.preservesDistances()?null:p.view,"simulationDistance",p.preservesDistances()?null:p.simulation,"preservesDistances",p.preservesDistances()));
+        List<Map<String,Object>> profiles=new ArrayList<>();for(Profile p:Profile.values())profiles.add(map("id",p.id,"available",p==Profile.CUSTOM||supported&&!(p==Profile.VANILLA_THROUGHPUT&&snapshot.kernel.equalsIgnoreCase("spigot")),"managed",p!=Profile.CUSTOM,"viewDistance",p.preservesDistances()?null:p.view,"simulationDistance",p.preservesDistances()?null:p.simulation,"preservesDistances",p.preservesDistances()));
         return map("kernel",snapshot.kernel,"minecraftVersion",snapshot.minecraftVersion,"profile",id,"managed",!id.equals("custom"),"pendingRestart",Boolean.TRUE.equals(selected.get("pendingRestart")),"revision",stored.sha,"capabilities",map("managedFiles",supported,"liveDistances",supported&&snapshot.liveDistances,"startupHookConfigured",startupHook,"startupReapply",startupHook?"before-kernel":"after-kernel-read","reason",reason),"profiles",profiles,"files",files,"warnings",warnings(snapshot,startupHook),"startupMessage",startupMessage,"worlds",snapshot.worlds.stream().map(w->map("name",w.name,"viewDistance",w.viewDistance,"simulationDistance",w.simulationDistance)).toList());
     }
     private static Map<String,Object> planDto(Plan p){List<Map<String,Object>> files=new ArrayList<>();for(Prepared f:p.files)files.add(map("path",f.target.relative,"beforeSha256",sha(f.before),"afterSha256",sha(f.after),"changes",f.changes));return map("planId",p.id,"profile",p.profile.id,"expiresAt",p.expires,"files",files,"liveDistances",!p.profile.preservesDistances()&&p.runtime.liveDistances,"preservesDistances",p.profile.preservesDistances(),"pendingRestart",p.files.stream().anyMatch(f->!f.changes.isEmpty()),"customPreservesFiles",p.profile==Profile.CUSTOM,"tradeoffs",tradeoffs(p.profile,p.runtime));}
     private static List<String> tradeoffs(Profile profile,RuntimeState runtime){
+        if(profile==Profile.VANILLA_THROUGHPUT)return List.of("View and simulation distances, entity activation, mob spawning, villager ticking, item merging, collisions and all gamerules are preserved.","Redstone dust uses VANILLA and pathfinding updates remain enabled.","Autosaves are spread across ticks (24 chunks per tick); the save interval and full shutdown save remain unchanged.","The automatic Paper chunk worker and IO settings remain upstream defaults; no fixed excessive thread count is imposed.");
         if(profile!=Profile.MAXIMUM_OPTIMIZED)return List.of();
         List<String> out=new ArrayList<>(List.of("Current view and simulation distances are preserved in properties, world overrides and the live API.","Reduced entity activation, inactive villager ticking disabled and spawner AI disabled can change farms and villager restocking.","A shorter spawn radius, larger item merging and fewer entity collisions change gameplay near crowded farms."));
         out.add(runtime.kernel.equalsIgnoreCase("spigot")?"Spigot has no supported redstone implementation setting; that optimization is skipped.":"Alternate Current changes redstone dust update order. Existing circuits may behave differently; test them before adoption.");return List.copyOf(out);
@@ -140,6 +141,14 @@ public final class KernelProfiles implements AutoCloseable {
     }
     private static List<Target> targets(Path root,RuntimeState r,Profile p)throws IOException {
         if(p==Profile.CUSTOM)return List.of();if(!knownKernel(r.kernel))throw new IOException("Unsupported kernel");
+        if(p==Profile.VANILLA_THROUGHPUT){
+            // A safe throughput preset never trims simulation or rewrites farm, spawn, activation or redstone timing settings.
+            if(r.kernel.equalsIgnoreCase("spigot"))throw new IOException("Vanilla throughput requires Paper chunk save configuration");
+            List<KernelConfigFiles.Edit> safe=List.of(edit("VANILLA","misc","redstone-implementation"),edit(true,"misc","update-pathfinding-on-block-update"),edit(24,"chunks","max-auto-save-chunks-per-tick"));
+            List<Target> safeTargets=new ArrayList<>();safeTargets.add(new Target("config/paper-world-defaults.yml",KernelConfigFiles.Kind.PAPER,safe));Set<Path> seen=new HashSet<>();
+            for(WorldState world:r.worlds){Path folder=world.folder.toAbsolutePath().normalize();if(!folder.startsWith(root))throw new IOException("World configuration is outside server directory");Path file=folder.resolve("paper-world.yml");if(Files.exists(file,LinkOption.NOFOLLOW_LINKS)&&seen.add(file))safeTargets.add(new Target(root.relativize(file).toString().replace('\\','/'),KernelConfigFiles.Kind.PAPER,safe));}
+            if(safeTargets.size()>MAX_FILES)throw new IOException("Too many kernel configuration files");return List.copyOf(safeTargets);
+        }
         List<Target> out=new ArrayList<>();if(!p.preservesDistances())out.add(new Target("server.properties",KernelConfigFiles.Kind.PROPERTIES,List.of(edit(p.view,"view-distance"),edit(p.simulation,"simulation-distance"))));
         Path spigot=resolve(root,"spigot.yml");Map<String,Object> spigotData=KernelConfigFiles.readYaml(KernelConfigFiles.Kind.SPIGOT,bounded(spigot,KernelConfigFiles.MAX_BYTES));
         Object settings=spigotData.get("world-settings");if(!(settings instanceof Map<?,?> worlds)||worlds.size()>129)throw new IOException("Unsupported Spigot world-settings layout");
@@ -221,6 +230,22 @@ public final class KernelProfiles implements AutoCloseable {
     }
     private void releaseLease(){if(leaseReleased.compareAndSet(false,true))try{runtimeLock.release();runtimeChannel.close();}catch(IOException ignored){}}
 
+    /** Caller must hold its normal offline/supervisor lease. This prelaunch path needs no Bukkit classes. */
+    static void adoptCoreIdentityOffline(Path root,Path pluginData,Path backup)throws Exception {
+        Path stateFile=pluginData.resolve("kernel-profiles/profile.json");if(!Files.exists(stateFile,LinkOption.NOFOLLOW_LINKS))return;
+        MccCoreInstaller.checkPath(root,stateFile,false);MccCoreInstaller.checkPath(root,backup,true);
+        StoredState stored=readStoredState(stateFile);Map<String,Object> selected=stored.values;
+        if("custom".equals(selected.get("profile"))||"Paper".equals(selected.get("kernel")))return;
+        if(!"Purpur".equals(selected.get("kernel"))||!"26.3".equals(selected.get("minecraftVersion")))throw new IOException("Managed profile cannot migrate to this MCC Core foundation");
+        byte[] before=bounded(stateFile,65536);Path previous=backup.resolve("previous-kernel-profile.json");
+        if(Files.exists(previous,LinkOption.NOFOLLOW_LINKS)){MccCoreInstaller.checkPath(root,previous,false);if(!sha(bounded(previous,65536)).equals(sha(before)))throw new IOException("Core profile migration backup differs");}
+        else writePrivateNew(previous,before);
+        Map<String,Object> next=new LinkedHashMap<>(selected);next.put("kernel","Paper");next.put("migratedFromKernel","Purpur");next.put("mccCoreMigrationAt",System.currentTimeMillis());
+        byte[] after=Json.write(next).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        if(!shaFile(stateFile).equals(stored.sha))throw new IOException("Managed profile changed during Core migration");
+        atomicReplace(stateFile,after);
+        writePrivateNew(backup.resolve("profile-migration.json"),Json.write(map("beforeSha256",sha(before),"afterSha256",sha(after),"from","Purpur","to","Paper","worldDataChanged",false)).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
     /** Caller must hold its normal offline/supervisor lease. This prelaunch path needs no Bukkit classes. */
     public static Map<String,Object> reapplyOffline(Path serverRoot,Path pluginData,String kernel,String minecraftVersion)throws Exception {
         Path root=serverRoot.toRealPath();Path data=pluginData.resolve("kernel-profiles");if(!Files.exists(data))return map("profile","custom","changedFiles",0);

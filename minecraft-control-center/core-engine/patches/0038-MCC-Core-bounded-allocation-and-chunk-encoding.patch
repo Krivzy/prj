@@ -1,0 +1,186 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MCC Core build <mcc-core-build@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 12:00:00 +0300
+Subject: [PATCH] MCC Core bounded allocation and chunk encoding optimizations
+
+Keep the standard Paper tick ownership, generation order, and game mechanics.
+Pool bounded ore scratch with a nested-call fallback; iterate NBT entries
+without a second hash lookup; encode contiguous long arrays in bulk with
+scalar fallback; construct chunk snapshots without a stream/hash table;
+remove redundant palette divider fields while preserving unsigned arithmetic.
+
+Prior-art review: Leaf MC 0157/0174/0240/0316 and Gale CompoundTag iteration.
+All new helper code is part of MCC Core, GPL-3.0-only. Upstream attribution
+and license details are retained in THIRD-PARTY.md and licenses/.
+
+diff --git a/net/minecraft/nbt/CompoundTag.java b/net/minecraft/nbt/CompoundTag.java
+index b9f6aa7..c281adf 100644
+--- a/net/minecraft/nbt/CompoundTag.java
++++ b/net/minecraft/nbt/CompoundTag.java
+@@ -170,9 +170,18 @@ public final class CompoundTag implements Tag {
+ 
+     @Override
+     public void write(final DataOutput output) throws IOException {
+-        for (String key : this.tags.keySet()) {
+-            Tag tag = this.tags.get(key);
+-            writeNamedTag(key, tag, output);
++        // MCC Core - avoid a second hash lookup and per-entry allocation for
++        // Paper's usual fastutil map, without changing its iteration order.
++        if (this.tags instanceof it.unimi.dsi.fastutil.objects.Object2ObjectMap<String, Tag> fastMap) {
++            final var entries = it.unimi.dsi.fastutil.objects.Object2ObjectMaps.fastIterator(fastMap);
++            while (entries.hasNext()) {
++                final var entry = entries.next();
++                writeNamedTag(entry.getKey(), entry.getValue(), output);
++            }
++        } else {
++            for (Entry<String, Tag> entry : this.tags.entrySet()) {
++                writeNamedTag(entry.getKey(), entry.getValue(), output);
++            }
+         }
+ 
+         output.writeByte(0);
+diff --git a/net/minecraft/network/FriendlyByteBuf.java b/net/minecraft/network/FriendlyByteBuf.java
+index b63d246..ffb0ea2 100644
+--- a/net/minecraft/network/FriendlyByteBuf.java
++++ b/net/minecraft/network/FriendlyByteBuf.java
+@@ -267,9 +267,7 @@ public class FriendlyByteBuf extends ByteBuf {
+     }
+ 
+     public static void writeFixedSizeLongArray(final ByteBuf output, final long[] longs) {
+-        for (long l : longs) {
+-            output.writeLong(l);
+-        }
++        dev.mcc.core.engine.LongArrayWriter.writeFixed(output, longs); // MCC Core - bounded contiguous bulk encoding
+     }
+ 
+     public long[] readLongArray() {
+diff --git a/net/minecraft/network/protocol/game/ClientboundLevelChunkPacketData.java b/net/minecraft/network/protocol/game/ClientboundLevelChunkPacketData.java
+index 06f0088..2067536 100644
+--- a/net/minecraft/network/protocol/game/ClientboundLevelChunkPacketData.java
++++ b/net/minecraft/network/protocol/game/ClientboundLevelChunkPacketData.java
+@@ -8,7 +8,6 @@ import java.util.List;
+ import java.util.Map;
+ import java.util.Optional;
+ import java.util.Map.Entry;
+-import java.util.stream.Collectors;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.core.SectionPos;
+ import net.minecraft.core.registries.Registries;
+@@ -68,10 +67,15 @@ public class ClientboundLevelChunkPacketData {
+     }
+     public ClientboundLevelChunkPacketData(final LevelChunk levelChunk, final io.papermc.paper.antixray.ChunkPacketInfo<net.minecraft.world.level.block.state.BlockState> chunkPacketInfo) {
+         // Paper end - Anti-Xray - Add chunk packet info
+-        this.heightmaps = levelChunk.getHeightmaps()
+-            .stream()
+-            .filter(entryx -> ((Heightmap.Types)entryx.getKey()).sendToClient())
+-            .collect(Collectors.toMap(Entry::getKey, entryx -> (long[])((Heightmap)entryx.getValue()).getRawData().clone()));
++        // MCC Core - fixed enum keys need no stream pipeline or hash table.
++        // Retain snapshot copies: asynchronous packet work must not observe
++        // subsequent live-world heightmap mutation.
++        this.heightmaps = new EnumMap<>(Heightmap.Types.class);
++        for (Entry<Heightmap.Types, Heightmap> entry : levelChunk.getHeightmaps()) {
++            if (entry.getKey().sendToClient()) {
++                this.heightmaps.put(entry.getKey(), entry.getValue().getRawData().clone());
++            }
++        }
+         this.buffer = new byte[calculateChunkSize(levelChunk)];
+         // Paper start - Anti-Xray - Add chunk packet info
+         if (chunkPacketInfo != null) {
+@@ -81,17 +85,17 @@ public class ClientboundLevelChunkPacketData {
+         this.blockEntitiesData = Lists.newArrayList();
+         int totalTileEntities = 0; // Paper - Handle oversized block entities in chunks
+ 
+-        for (Entry<BlockPos, BlockEntity> entry : levelChunk.getBlockEntities().entrySet()) {
++        for (BlockEntity blockEntity : levelChunk.getBlockEntities().values()) {
+             // Paper start - Handle oversized block entities in chunks
+             if (++totalTileEntities > BLOCK_ENTITY_LIMIT) {
+-                net.minecraft.network.protocol.Packet<ClientGamePacketListener> packet = entry.getValue().getUpdatePacket();
++                net.minecraft.network.protocol.Packet<ClientGamePacketListener> packet = blockEntity.getUpdatePacket();
+                 if (packet != null) {
+                     this.extraPackets.add(packet);
+                     continue;
+                 }
+             }
+             // Paper end - Handle oversized block entities in chunks
+-            this.blockEntitiesData.add(ClientboundLevelChunkPacketData.BlockEntityInfo.create(entry.getValue()));
++            this.blockEntitiesData.add(ClientboundLevelChunkPacketData.BlockEntityInfo.create(blockEntity));
+         }
+     }
+ 
+diff --git a/net/minecraft/util/SimpleBitStorage.java b/net/minecraft/util/SimpleBitStorage.java
+index b775c71..6403e82 100644
+--- a/net/minecraft/util/SimpleBitStorage.java
++++ b/net/minecraft/util/SimpleBitStorage.java
+@@ -205,8 +205,8 @@ public class SimpleBitStorage implements BitStorage {
+     private final long mask;
+     private final int size;
+     private final int valuesPerLong;
+-    private final int divideMul; private final long divideMulUnsigned; // Paper - Perf: Optimize SimpleBitStorage; referenced in b(int) with 2 Integer.toUnsignedLong calls
+-    private final int divideAdd; private final long divideAddUnsigned; // Paper - Perf: Optimize SimpleBitStorage
++    private final int divideMul; // MCC Core - keep one representation of each unsigned divider
++    private final int divideAdd;
+     private final int divideShift;
+ 
+     // Paper start - optimise bitstorage read/write operations
+@@ -263,8 +263,8 @@ public class SimpleBitStorage implements BitStorage {
+         this.mask = (1L << bits) - 1L;
+         this.valuesPerLong = (char)(64 / bits);
+         int row = 3 * (this.valuesPerLong - 1);
+-        this.divideMul = MAGIC[row + 0]; this.divideMulUnsigned = Integer.toUnsignedLong(this.divideMul); // Paper - Perf: Optimize SimpleBitStorage
+-        this.divideAdd = MAGIC[row + 1]; this.divideAddUnsigned = Integer.toUnsignedLong(this.divideAdd); // Paper - Perf: Optimize SimpleBitStorage
++        this.divideMul = MAGIC[row + 0];
++        this.divideAdd = MAGIC[row + 1];
+         this.divideShift = MAGIC[row + 2];
+         int requiredLength = (size + this.valuesPerLong - 1) / this.valuesPerLong;
+         if (data != null) {
+@@ -286,7 +286,7 @@ public class SimpleBitStorage implements BitStorage {
+     }
+ 
+     private int cellIndex(final int bitIndex) {
+-        return (int)(bitIndex * this.divideMulUnsigned + this.divideAddUnsigned >> 32 >> this.divideShift); // Paper - Perf: Optimize SimpleBitStorage
++        return (int)(bitIndex * Integer.toUnsignedLong(this.divideMul) + Integer.toUnsignedLong(this.divideAdd) >> 32 >> this.divideShift); // MCC Core - identical unsigned arithmetic without duplicate fields
+     }
+ 
+     @Override
+diff --git a/net/minecraft/world/level/levelgen/feature/OreFeature.java b/net/minecraft/world/level/levelgen/feature/OreFeature.java
+index e6aee6a..178709c 100644
+--- a/net/minecraft/world/level/levelgen/feature/OreFeature.java
++++ b/net/minecraft/world/level/levelgen/feature/OreFeature.java
+@@ -78,9 +78,36 @@ public class OreFeature extends AbstractOreFeature {
+         final int zStart,
+         final int sizeXZ,
+         final int sizeY
++    ) {
++        // MCC Core - reuse only bounded scratch, with a fresh fallback for
++        // nested calls and large datapacks. All random/placement work stays
++        // on its original generation worker and in its original order.
++        final BitSet tested = dev.mcc.core.engine.OreBitSetPool.acquire(sizeXZ * sizeY * sizeXZ);
++        try {
++            return this.doPlaceWithScratch(level, random, x0, x1, z0, z1, y0, y1,
++                xStart, yStart, zStart, sizeXZ, sizeY, tested);
++        } finally {
++            dev.mcc.core.engine.OreBitSetPool.release(tested);
++        }
++    }
++
++    private boolean doPlaceWithScratch(
++        final WorldGenLevel level,
++        final RandomSource random,
++        final double x0,
++        final double x1,
++        final double z0,
++        final double z1,
++        final double y0,
++        final double y1,
++        final int xStart,
++        final int yStart,
++        final int zStart,
++        final int sizeXZ,
++        final int sizeY,
++        final BitSet tested
+     ) {
+         int placed = 0;
+-        BitSet tested = new BitSet(sizeXZ * sizeY * sizeXZ);
+         BlockPos.MutableBlockPos orePos = new BlockPos.MutableBlockPos();
+         double[] data = new double[this.size * 4];
+ 

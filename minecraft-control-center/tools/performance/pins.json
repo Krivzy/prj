@@ -1,0 +1,28 @@
+{
+  "minecraft": "26.3",
+  "jdkMajor": 25,
+  "paper": {
+    "build": 169,
+    "upstreamCommit": "46d4834e8e2ec4af9dcfa028076fb16dfb8a3911",
+    "sha256": "185d9f4267afca48959d6a56150cf8803b6645aee10de3ed147df7ab1ff781fb"
+  },
+  "purpur": {
+    "build": 2647,
+    "sha256": "e8003c8a9967d5111cf222fd9b83ced6f34eb24e90d7ba7a9da886dd71fb746f"
+  },
+  "foundation": {
+    "version": "0.2.0",
+    "sha256": "86c96263ba9a6257cc8b03e8e8fd8f90ee03fedb396918ed1fa1f74ebe196223",
+    "patchsetSha256": "3d42ace4d8f3a14bb7765cb173da0bcd06aa7a6533bd33e4e8892a50d0ca3c6f"
+  },
+  "compileDependencies": {
+    "io/papermc/paper/paper-api/26.3.build.169-beta/paper-api-26.3.build.169-beta.jar": "94ab589248e2fac75a2e83fe1feb9af22bbe99bd9baaa1c801328e54538b4213",
+    "net/kyori/adventure-key/5.2.0/adventure-key-5.2.0.jar": "0184d173200e2eef8fbc791f622d1d58fd459f8930c616b5a4fe79e83eda6c55",
+    "net/kyori/adventure-api/5.2.0/adventure-api-5.2.0.jar": "7e52fe7190be3e87b3b3f71712cfa12315fcd27109f302a7b440c12f01fae827",
+    "com/google/guava/guava/33.6.0-jre/guava-33.6.0-jre.jar": "dc573e1fca4fd5454f4a5fd3d7da2df03002876a4175bafc14a95980dd7713b3"
+  },
+  "annotations": {
+    "coordinate": "org.jetbrains:annotations:26.1.0",
+    "sha256": "ebc7aec252ed0c7d2d04c039d7f00e69f7b86b1f493c741d67b3ef31b986b054"
+  }
+}

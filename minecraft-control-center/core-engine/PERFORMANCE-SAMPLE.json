@@ -1,0 +1,1051 @@
+{
+  "measuredAt": "2026-10-11T18:11:53.173086+00:00",
+  "scope": "one-process-isolated-hotpaths-not-server-benchmark",
+  "engineVersion": "0.2.0",
+  "foundationSha256": "86c96263ba9a6257cc8b03e8e8fd8f90ee03fedb396918ed1fa1f74ebe196223",
+  "sourceCommit": "46d4834e8e2ec4af9dcfa028076fb16dfb8a3911",
+  "jvmFlags": [
+    "-Xms128m",
+    "-Xmx384m",
+    "-XX:+UseG1GC",
+    "--enable-native-access=ALL-UNNAMED"
+  ],
+  "platform": "Windows x64",
+  "rawSha256": "08b97116ce44eb9dd28b94d10a41ac413ee20fa0ef5f8189fe5a38b2ad182fd7",
+  "summary": [
+    {
+      "workload": "ore-scratch-4096-bits",
+      "original": {
+        "medianNanosPerOperation": 122.375,
+        "medianBytesPerOperation": 528.0
+      },
+      "optimized": {
+        "medianNanosPerOperation": 127.305,
+        "medianBytesPerOperation": 0.0
+      },
+      "optimizedToOriginalMedianTimeRatio": 1.040286006128703
+    },
+    {
+      "workload": "ore-scratch-16384-bits",
+      "original": {
+        "medianNanosPerOperation": 355.935,
+        "medianBytesPerOperation": 2064.0
+      },
+      "optimized": {
+        "medianNanosPerOperation": 189.8225,
+        "medianBytesPerOperation": 0.0
+      },
+      "optimizedToOriginalMedianTimeRatio": 0.533306643066852
+    },
+    {
+      "workload": "long-encoding-256-heap",
+      "original": {
+        "medianNanosPerOperation": 234.6075,
+        "medianBytesPerOperation": 0.0
+      },
+      "optimized": {
+        "medianNanosPerOperation": 70.995,
+        "medianBytesPerOperation": 0.0
+      },
+      "optimizedToOriginalMedianTimeRatio": 0.3026118090853873
+    },
+    {
+      "workload": "long-encoding-2048-heap",
+      "original": {
+        "medianNanosPerOperation": 1825.9475,
+        "medianBytesPerOperation": 0.0
+      },
+      "optimized": {
+        "medianNanosPerOperation": 650.7625,
+        "medianBytesPerOperation": 0.0
+      },
+      "optimizedToOriginalMedianTimeRatio": 0.35639715818773543
+    },
+    {
+      "workload": "long-encoding-2048-direct",
+      "original": {
+        "medianNanosPerOperation": 3286.975,
+        "medianBytesPerOperation": 0.0
+      },
+      "optimized": {
+        "medianNanosPerOperation": 500.9425,
+        "medianBytesPerOperation": 120.0
+      },
+      "optimizedToOriginalMedianTimeRatio": 0.15240228477551548
+    },
+    {
+      "workload": "nbt-32-int-string-pairs",
+      "original": {
+        "medianNanosPerOperation": 5896.450000000001,
+        "medianBytesPerOperation": 40.0
+      },
+      "optimized": {
+        "medianNanosPerOperation": 5752.525,
+        "medianBytesPerOperation": 0.0
+      },
+      "optimizedToOriginalMedianTimeRatio": 0.9755912455799675
+    },
+    {
+      "workload": "nbt-256-int-string-pairs",
+      "original": {
+        "medianNanosPerOperation": 47693.4,
+        "medianBytesPerOperation": 40.0
+      },
+      "optimized": {
+        "medianNanosPerOperation": 46617.649999999994,
+        "medianBytesPerOperation": 0.0
+      },
+      "optimizedToOriginalMedianTimeRatio": 0.9774444682073409
+    }
+  ],
+  "raw": {
+    "scope": "isolated-hotpaths-only",
+    "java": "25.0.1",
+    "warmupsPerMode": 4,
+    "counterbalancedRounds": 8,
+    "threadAllocationCounter": true,
+    "checksumsEqual": true,
+    "serverStarted": false,
+    "serverSuperiorityClaimed": false,
+    "results": [
+      {
+        "workload": "ore-scratch-4096-bits",
+        "samples": [
+          {
+            "mode": "original",
+            "round": 0,
+            "operations": 20000,
+            "elapsedNanos": 2245200,
+            "allocatedBytes": 10560000,
+            "checksum": "3420784091572563968"
+          },
+          {
+            "mode": "optimized",
+            "round": 0,
+            "operations": 20000,
+            "elapsedNanos": 3042500,
+            "allocatedBytes": 0,
+            "checksum": "3420784091572563968"
+          },
+          {
+            "mode": "original",
+            "round": 1,
+            "operations": 20000,
+            "elapsedNanos": 2519100,
+            "allocatedBytes": 10560000,
+            "checksum": "3420784091572563968"
+          },
+          {
+            "mode": "optimized",
+            "round": 1,
+            "operations": 20000,
+            "elapsedNanos": 2534600,
+            "allocatedBytes": 0,
+            "checksum": "3420784091572563968"
+          },
+          {
+            "mode": "original",
+            "round": 2,
+            "operations": 20000,
+            "elapsedNanos": 2344000,
+            "allocatedBytes": 10560000,
+            "checksum": "3420784091572563968"
+          },
+          {
+            "mode": "optimized",
+            "round": 2,
+            "operations": 20000,
+            "elapsedNanos": 2559000,
+            "allocatedBytes": 0,
+            "checksum": "3420784091572563968"
+          },
+          {
+            "mode": "original",
+            "round": 3,
+            "operations": 20000,
+            "elapsedNanos": 2472100,
+            "allocatedBytes": 10560000,
+            "checksum": "3420784091572563968"
+          },
+          {
+            "mode": "optimized",
+            "round": 3,
+            "operations": 20000,
+            "elapsedNanos": 2568400,
+            "allocatedBytes": 0,
+            "checksum": "3420784091572563968"
+          },
+          {
+            "mode": "original",
+            "round": 4,
+            "operations": 20000,
+            "elapsedNanos": 2973000,
+            "allocatedBytes": 10560000,
+            "checksum": "3420784091572563968"
+          },
+          {
+            "mode": "optimized",
+            "round": 4,
+            "operations": 20000,
+            "elapsedNanos": 2557600,
+            "allocatedBytes": 0,
+            "checksum": "3420784091572563968"
+          },
+          {
+            "mode": "original",
+            "round": 5,
+            "operations": 20000,
+            "elapsedNanos": 4959800,
+            "allocatedBytes": 10560000,
+            "checksum": "3420784091572563968"
+          },
+          {
+            "mode": "optimized",
+            "round": 5,
+            "operations": 20000,
+            "elapsedNanos": 2441700,
+            "allocatedBytes": 0,
+            "checksum": "3420784091572563968"
+          },
+          {
+            "mode": "original",
+            "round": 6,
+            "operations": 20000,
+            "elapsedNanos": 2422900,
+            "allocatedBytes": 10560000,
+            "checksum": "3420784091572563968"
+          },
+          {
+            "mode": "optimized",
+            "round": 6,
+            "operations": 20000,
+            "elapsedNanos": 2461000,
+            "allocatedBytes": 0,
+            "checksum": "3420784091572563968"
+          },
+          {
+            "mode": "original",
+            "round": 7,
+            "operations": 20000,
+            "elapsedNanos": 2360900,
+            "allocatedBytes": 10560000,
+            "checksum": "3420784091572563968"
+          },
+          {
+            "mode": "optimized",
+            "round": 7,
+            "operations": 20000,
+            "elapsedNanos": 2444400,
+            "allocatedBytes": 0,
+            "checksum": "3420784091572563968"
+          }
+        ]
+      },
+      {
+        "workload": "ore-scratch-16384-bits",
+        "samples": [
+          {
+            "mode": "original",
+            "round": 0,
+            "operations": 20000,
+            "elapsedNanos": 7089700,
+            "allocatedBytes": 41280000,
+            "checksum": "8571861897761020928"
+          },
+          {
+            "mode": "optimized",
+            "round": 0,
+            "operations": 20000,
+            "elapsedNanos": 5229100,
+            "allocatedBytes": 0,
+            "checksum": "8571861897761020928"
+          },
+          {
+            "mode": "original",
+            "round": 1,
+            "operations": 20000,
+            "elapsedNanos": 4992800,
+            "allocatedBytes": 41280000,
+            "checksum": "8571861897761020928"
+          },
+          {
+            "mode": "optimized",
+            "round": 1,
+            "operations": 20000,
+            "elapsedNanos": 3853400,
+            "allocatedBytes": 0,
+            "checksum": "8571861897761020928"
+          },
+          {
+            "mode": "original",
+            "round": 2,
+            "operations": 20000,
+            "elapsedNanos": 10112700,
+            "allocatedBytes": 41280000,
+            "checksum": "8571861897761020928"
+          },
+          {
+            "mode": "optimized",
+            "round": 2,
+            "operations": 20000,
+            "elapsedNanos": 3803400,
+            "allocatedBytes": 0,
+            "checksum": "8571861897761020928"
+          },
+          {
+            "mode": "original",
+            "round": 3,
+            "operations": 20000,
+            "elapsedNanos": 7445300,
+            "allocatedBytes": 41280000,
+            "checksum": "8571861897761020928"
+          },
+          {
+            "mode": "optimized",
+            "round": 3,
+            "operations": 20000,
+            "elapsedNanos": 3975400,
+            "allocatedBytes": 0,
+            "checksum": "8571861897761020928"
+          },
+          {
+            "mode": "original",
+            "round": 4,
+            "operations": 20000,
+            "elapsedNanos": 7147700,
+            "allocatedBytes": 41280000,
+            "checksum": "8571861897761020928"
+          },
+          {
+            "mode": "optimized",
+            "round": 4,
+            "operations": 20000,
+            "elapsedNanos": 3789500,
+            "allocatedBytes": 0,
+            "checksum": "8571861897761020928"
+          },
+          {
+            "mode": "original",
+            "round": 5,
+            "operations": 20000,
+            "elapsedNanos": 5044200,
+            "allocatedBytes": 41280000,
+            "checksum": "8571861897761020928"
+          },
+          {
+            "mode": "optimized",
+            "round": 5,
+            "operations": 20000,
+            "elapsedNanos": 3768200,
+            "allocatedBytes": 0,
+            "checksum": "8571861897761020928"
+          },
+          {
+            "mode": "original",
+            "round": 6,
+            "operations": 20000,
+            "elapsedNanos": 5011600,
+            "allocatedBytes": 41280000,
+            "checksum": "8571861897761020928"
+          },
+          {
+            "mode": "optimized",
+            "round": 6,
+            "operations": 20000,
+            "elapsedNanos": 3770600,
+            "allocatedBytes": 0,
+            "checksum": "8571861897761020928"
+          },
+          {
+            "mode": "original",
+            "round": 7,
+            "operations": 20000,
+            "elapsedNanos": 7173900,
+            "allocatedBytes": 41280000,
+            "checksum": "8571861897761020928"
+          },
+          {
+            "mode": "optimized",
+            "round": 7,
+            "operations": 20000,
+            "elapsedNanos": 3771700,
+            "allocatedBytes": 0,
+            "checksum": "8571861897761020928"
+          }
+        ]
+      },
+      {
+        "workload": "long-encoding-256-heap",
+        "samples": [
+          {
+            "mode": "original",
+            "round": 0,
+            "operations": 20000,
+            "elapsedNanos": 4738800,
+            "allocatedBytes": 0,
+            "checksum": "13983063569827381248"
+          },
+          {
+            "mode": "optimized",
+            "round": 0,
+            "operations": 20000,
+            "elapsedNanos": 1421300,
+            "allocatedBytes": 0,
+            "checksum": "13983063569827381248"
+          },
+          {
+            "mode": "original",
+            "round": 1,
+            "operations": 20000,
+            "elapsedNanos": 4690900,
+            "allocatedBytes": 0,
+            "checksum": "13983063569827381248"
+          },
+          {
+            "mode": "optimized",
+            "round": 1,
+            "operations": 20000,
+            "elapsedNanos": 1418300,
+            "allocatedBytes": 0,
+            "checksum": "13983063569827381248"
+          },
+          {
+            "mode": "original",
+            "round": 2,
+            "operations": 20000,
+            "elapsedNanos": 4693400,
+            "allocatedBytes": 0,
+            "checksum": "13983063569827381248"
+          },
+          {
+            "mode": "optimized",
+            "round": 2,
+            "operations": 20000,
+            "elapsedNanos": 1438900,
+            "allocatedBytes": 0,
+            "checksum": "13983063569827381248"
+          },
+          {
+            "mode": "original",
+            "round": 3,
+            "operations": 20000,
+            "elapsedNanos": 4684300,
+            "allocatedBytes": 0,
+            "checksum": "13983063569827381248"
+          },
+          {
+            "mode": "optimized",
+            "round": 3,
+            "operations": 20000,
+            "elapsedNanos": 1418700,
+            "allocatedBytes": 0,
+            "checksum": "13983063569827381248"
+          },
+          {
+            "mode": "original",
+            "round": 4,
+            "operations": 20000,
+            "elapsedNanos": 4678100,
+            "allocatedBytes": 0,
+            "checksum": "13983063569827381248"
+          },
+          {
+            "mode": "optimized",
+            "round": 4,
+            "operations": 20000,
+            "elapsedNanos": 1425000,
+            "allocatedBytes": 0,
+            "checksum": "13983063569827381248"
+          },
+          {
+            "mode": "original",
+            "round": 5,
+            "operations": 20000,
+            "elapsedNanos": 4697700,
+            "allocatedBytes": 0,
+            "checksum": "13983063569827381248"
+          },
+          {
+            "mode": "optimized",
+            "round": 5,
+            "operations": 20000,
+            "elapsedNanos": 1420500,
+            "allocatedBytes": 0,
+            "checksum": "13983063569827381248"
+          },
+          {
+            "mode": "original",
+            "round": 6,
+            "operations": 20000,
+            "elapsedNanos": 4678700,
+            "allocatedBytes": 0,
+            "checksum": "13983063569827381248"
+          },
+          {
+            "mode": "optimized",
+            "round": 6,
+            "operations": 20000,
+            "elapsedNanos": 1419300,
+            "allocatedBytes": 0,
+            "checksum": "13983063569827381248"
+          },
+          {
+            "mode": "original",
+            "round": 7,
+            "operations": 20000,
+            "elapsedNanos": 4693800,
+            "allocatedBytes": 0,
+            "checksum": "13983063569827381248"
+          },
+          {
+            "mode": "optimized",
+            "round": 7,
+            "operations": 20000,
+            "elapsedNanos": 1418400,
+            "allocatedBytes": 0,
+            "checksum": "13983063569827381248"
+          }
+        ]
+      },
+      {
+        "workload": "long-encoding-2048-heap",
+        "samples": [
+          {
+            "mode": "original",
+            "round": 0,
+            "operations": 20000,
+            "elapsedNanos": 36511500,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "optimized",
+            "round": 0,
+            "operations": 20000,
+            "elapsedNanos": 13037700,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "original",
+            "round": 1,
+            "operations": 20000,
+            "elapsedNanos": 36444000,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "optimized",
+            "round": 1,
+            "operations": 20000,
+            "elapsedNanos": 12980100,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "original",
+            "round": 2,
+            "operations": 20000,
+            "elapsedNanos": 36381100,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "optimized",
+            "round": 2,
+            "operations": 20000,
+            "elapsedNanos": 12996400,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "original",
+            "round": 3,
+            "operations": 20000,
+            "elapsedNanos": 36364100,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "optimized",
+            "round": 3,
+            "operations": 20000,
+            "elapsedNanos": 12957300,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "original",
+            "round": 4,
+            "operations": 20000,
+            "elapsedNanos": 36536200,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "optimized",
+            "round": 4,
+            "operations": 20000,
+            "elapsedNanos": 13018300,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "original",
+            "round": 5,
+            "operations": 20000,
+            "elapsedNanos": 36553500,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "optimized",
+            "round": 5,
+            "operations": 20000,
+            "elapsedNanos": 13012200,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "original",
+            "round": 6,
+            "operations": 20000,
+            "elapsedNanos": 36867200,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "optimized",
+            "round": 6,
+            "operations": 20000,
+            "elapsedNanos": 13130700,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "original",
+            "round": 7,
+            "operations": 20000,
+            "elapsedNanos": 36526400,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "optimized",
+            "round": 7,
+            "operations": 20000,
+            "elapsedNanos": 13032700,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          }
+        ]
+      },
+      {
+        "workload": "long-encoding-2048-direct",
+        "samples": [
+          {
+            "mode": "original",
+            "round": 0,
+            "operations": 20000,
+            "elapsedNanos": 65632300,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "optimized",
+            "round": 0,
+            "operations": 20000,
+            "elapsedNanos": 12079400,
+            "allocatedBytes": 2400000,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "original",
+            "round": 1,
+            "operations": 20000,
+            "elapsedNanos": 65535600,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "optimized",
+            "round": 1,
+            "operations": 20000,
+            "elapsedNanos": 9930000,
+            "allocatedBytes": 2400000,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "original",
+            "round": 2,
+            "operations": 20000,
+            "elapsedNanos": 65896300,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "optimized",
+            "round": 2,
+            "operations": 20000,
+            "elapsedNanos": 9911800,
+            "allocatedBytes": 2400000,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "original",
+            "round": 3,
+            "operations": 20000,
+            "elapsedNanos": 66172000,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "optimized",
+            "round": 3,
+            "operations": 20000,
+            "elapsedNanos": 9938500,
+            "allocatedBytes": 2400000,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "original",
+            "round": 4,
+            "operations": 20000,
+            "elapsedNanos": 65470200,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "optimized",
+            "round": 4,
+            "operations": 20000,
+            "elapsedNanos": 10065700,
+            "allocatedBytes": 2400000,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "original",
+            "round": 5,
+            "operations": 20000,
+            "elapsedNanos": 65810800,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "optimized",
+            "round": 5,
+            "operations": 20000,
+            "elapsedNanos": 10024600,
+            "allocatedBytes": 2400000,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "original",
+            "round": 6,
+            "operations": 20000,
+            "elapsedNanos": 65668200,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "optimized",
+            "round": 6,
+            "operations": 20000,
+            "elapsedNanos": 10108800,
+            "allocatedBytes": 2400000,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "original",
+            "round": 7,
+            "operations": 20000,
+            "elapsedNanos": 65881800,
+            "allocatedBytes": 0,
+            "checksum": "16858840125887315456"
+          },
+          {
+            "mode": "optimized",
+            "round": 7,
+            "operations": 20000,
+            "elapsedNanos": 10013100,
+            "allocatedBytes": 2400000,
+            "checksum": "16858840125887315456"
+          }
+        ]
+      },
+      {
+        "workload": "nbt-32-int-string-pairs",
+        "samples": [
+          {
+            "mode": "original",
+            "round": 0,
+            "operations": 2000,
+            "elapsedNanos": 11788000,
+            "allocatedBytes": 80000,
+            "checksum": "3288836004939159296"
+          },
+          {
+            "mode": "optimized",
+            "round": 0,
+            "operations": 2000,
+            "elapsedNanos": 11501300,
+            "allocatedBytes": 0,
+            "checksum": "3288836004939159296"
+          },
+          {
+            "mode": "original",
+            "round": 1,
+            "operations": 2000,
+            "elapsedNanos": 11825300,
+            "allocatedBytes": 80000,
+            "checksum": "3288836004939159296"
+          },
+          {
+            "mode": "optimized",
+            "round": 1,
+            "operations": 2000,
+            "elapsedNanos": 11515000,
+            "allocatedBytes": 0,
+            "checksum": "3288836004939159296"
+          },
+          {
+            "mode": "original",
+            "round": 2,
+            "operations": 2000,
+            "elapsedNanos": 11756500,
+            "allocatedBytes": 80000,
+            "checksum": "3288836004939159296"
+          },
+          {
+            "mode": "optimized",
+            "round": 2,
+            "operations": 2000,
+            "elapsedNanos": 11526900,
+            "allocatedBytes": 0,
+            "checksum": "3288836004939159296"
+          },
+          {
+            "mode": "original",
+            "round": 3,
+            "operations": 2000,
+            "elapsedNanos": 11790600,
+            "allocatedBytes": 80000,
+            "checksum": "3288836004939159296"
+          },
+          {
+            "mode": "optimized",
+            "round": 3,
+            "operations": 2000,
+            "elapsedNanos": 11499300,
+            "allocatedBytes": 0,
+            "checksum": "3288836004939159296"
+          },
+          {
+            "mode": "original",
+            "round": 4,
+            "operations": 2000,
+            "elapsedNanos": 11803000,
+            "allocatedBytes": 80000,
+            "checksum": "3288836004939159296"
+          },
+          {
+            "mode": "optimized",
+            "round": 4,
+            "operations": 2000,
+            "elapsedNanos": 11505900,
+            "allocatedBytes": 0,
+            "checksum": "3288836004939159296"
+          },
+          {
+            "mode": "original",
+            "round": 5,
+            "operations": 2000,
+            "elapsedNanos": 11831600,
+            "allocatedBytes": 80000,
+            "checksum": "3288836004939159296"
+          },
+          {
+            "mode": "optimized",
+            "round": 5,
+            "operations": 2000,
+            "elapsedNanos": 11491800,
+            "allocatedBytes": 0,
+            "checksum": "3288836004939159296"
+          },
+          {
+            "mode": "original",
+            "round": 6,
+            "operations": 2000,
+            "elapsedNanos": 11795200,
+            "allocatedBytes": 80000,
+            "checksum": "3288836004939159296"
+          },
+          {
+            "mode": "optimized",
+            "round": 6,
+            "operations": 2000,
+            "elapsedNanos": 11504200,
+            "allocatedBytes": 0,
+            "checksum": "3288836004939159296"
+          },
+          {
+            "mode": "original",
+            "round": 7,
+            "operations": 2000,
+            "elapsedNanos": 11790200,
+            "allocatedBytes": 80000,
+            "checksum": "3288836004939159296"
+          },
+          {
+            "mode": "optimized",
+            "round": 7,
+            "operations": 2000,
+            "elapsedNanos": 11509100,
+            "allocatedBytes": 0,
+            "checksum": "3288836004939159296"
+          }
+        ]
+      },
+      {
+        "workload": "nbt-256-int-string-pairs",
+        "samples": [
+          {
+            "mode": "original",
+            "round": 0,
+            "operations": 2000,
+            "elapsedNanos": 95311200,
+            "allocatedBytes": 80000,
+            "checksum": "15747832487779089152"
+          },
+          {
+            "mode": "optimized",
+            "round": 0,
+            "operations": 2000,
+            "elapsedNanos": 92750000,
+            "allocatedBytes": 0,
+            "checksum": "15747832487779089152"
+          },
+          {
+            "mode": "original",
+            "round": 1,
+            "operations": 2000,
+            "elapsedNanos": 95322100,
+            "allocatedBytes": 80000,
+            "checksum": "15747832487779089152"
+          },
+          {
+            "mode": "optimized",
+            "round": 1,
+            "operations": 2000,
+            "elapsedNanos": 92931800,
+            "allocatedBytes": 0,
+            "checksum": "15747832487779089152"
+          },
+          {
+            "mode": "original",
+            "round": 2,
+            "operations": 2000,
+            "elapsedNanos": 95282700,
+            "allocatedBytes": 80000,
+            "checksum": "15747832487779089152"
+          },
+          {
+            "mode": "optimized",
+            "round": 2,
+            "operations": 2000,
+            "elapsedNanos": 93473200,
+            "allocatedBytes": 0,
+            "checksum": "15747832487779089152"
+          },
+          {
+            "mode": "original",
+            "round": 3,
+            "operations": 2000,
+            "elapsedNanos": 95684600,
+            "allocatedBytes": 80000,
+            "checksum": "15747832487779089152"
+          },
+          {
+            "mode": "optimized",
+            "round": 3,
+            "operations": 2000,
+            "elapsedNanos": 93032800,
+            "allocatedBytes": 0,
+            "checksum": "15747832487779089152"
+          },
+          {
+            "mode": "original",
+            "round": 4,
+            "operations": 2000,
+            "elapsedNanos": 95268300,
+            "allocatedBytes": 80000,
+            "checksum": "15747832487779089152"
+          },
+          {
+            "mode": "optimized",
+            "round": 4,
+            "operations": 2000,
+            "elapsedNanos": 94119500,
+            "allocatedBytes": 0,
+            "checksum": "15747832487779089152"
+          },
+          {
+            "mode": "original",
+            "round": 5,
+            "operations": 2000,
+            "elapsedNanos": 95757900,
+            "allocatedBytes": 80000,
+            "checksum": "15747832487779089152"
+          },
+          {
+            "mode": "optimized",
+            "round": 5,
+            "operations": 2000,
+            "elapsedNanos": 93641500,
+            "allocatedBytes": 0,
+            "checksum": "15747832487779089152"
+          },
+          {
+            "mode": "original",
+            "round": 6,
+            "operations": 2000,
+            "elapsedNanos": 95642400,
+            "allocatedBytes": 80000,
+            "checksum": "15747832487779089152"
+          },
+          {
+            "mode": "optimized",
+            "round": 6,
+            "operations": 2000,
+            "elapsedNanos": 93386400,
+            "allocatedBytes": 0,
+            "checksum": "15747832487779089152"
+          },
+          {
+            "mode": "original",
+            "round": 7,
+            "operations": 2000,
+            "elapsedNanos": 95451500,
+            "allocatedBytes": 80000,
+            "checksum": "15747832487779089152"
+          },
+          {
+            "mode": "optimized",
+            "round": 7,
+            "operations": 2000,
+            "elapsedNanos": 93084200,
+            "allocatedBytes": 0,
+            "checksum": "15747832487779089152"
+          }
+        ]
+      }
+    ]
+  },
+  "limitations": [
+    "Single JVM fork; no confidence intervals or general server throughput claim",
+    "Subset: ore scratch/NBT/long encoding; chunk packet construction and palette layout not timed",
+    "Direct bulk encoding allocates 120 temporary bytes per measured operation",
+    "4096-bit scratch removes allocation but median time is 4% higher in this sample",
+    "Live client/network, world generation, AI and plugins need separate native measurements"
+  ]
+}

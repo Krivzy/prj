@@ -34,7 +34,9 @@ public final class ServerPlatform {
         return parseMinecraftVersion(Bukkit.getBukkitVersion());
     }
     public static String parseMinecraftVersion(String value) { var match = VERSION.matcher(value == null ? "" : value); return match.matches() ? match.group(1) : "unknown"; }
-    public static String brand() { String name = Bukkit.getName(); return name == null || name.isBlank() ? "Unknown Bukkit server" : name; }
+    public static String brand() { return displayBrand(Bukkit.getName(),dev.mcc.server.MccCoreLink.active()); }
+    /** The Core brand requires the in-process handshake; a property or a filename is not proof. */
+    static String displayBrand(String reported,boolean verifiedCore) { return verifiedCore ? "MCC Core" : reported == null || reported.isBlank() ? "Unknown Bukkit server" : reported; }
     /** Main-thread tick observation is a truthful fallback, never an MSPT measurement. */
     public static void tick() { observedTick++; ticks.tick(System.nanoTime()); }
     public static long currentTick() { Object api = optional(Bukkit.getServer(), "getCurrentTick"); return api instanceof Number number ? number.longValue() : observedTick; }

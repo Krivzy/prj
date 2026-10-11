@@ -23,18 +23,17 @@ class AuthTest {
         assertFalse(Auth.verify(password, "argon2id$v=19$m=65536,t=3,p=1$?$?"));
     }
 
-    @Test void ownerSetupIsLocalSingleUseAndSessionLogoutRevokesAccess() throws Exception {
+    @Test void ownerSetupHasNoPublicDefaultsAndSessionLogoutRevokesAccess() throws Exception {
         try (Database db = new Database(directory.resolve("database.db"))) {
             Auth auth = new Auth(db, directory);
-            String token = Files.readString(directory.resolve(".setup-token"));
             assertTrue(auth.setupRequired());
-            assertThrows(SecurityException.class, () -> auth.setup(token, "test-owner", "A-long-random-test-pass!", false));
+            assertFalse(Files.exists(directory.resolve(".setup-token")));
             assertThrows(SecurityException.class, () -> auth.setup("wrong-token", "test-owner", "A-long-random-test-pass!", true));
-            Auth.Session first = auth.setup(token, "test-owner", "A-long-random-test-pass!", true);
+            Auth.Session first = AuthFixture.owner(auth,"test-owner","A-long-random-test-pass!");
             assertEquals("Owner", first.role());
             assertFalse(auth.setupRequired());
             assertFalse(Files.exists(directory.resolve(".setup-token")));
-            assertThrows(SecurityException.class, () -> auth.setup(token, "second-owner", "A-long-random-test-pass!", true));
+            assertThrows(SecurityException.class, () -> AuthFixture.owner(auth,"second-owner","A-long-random-test-pass!"));
             assertSame(first, auth.session(first.id()));
             auth.logout(first);
             assertNull(auth.session(first.id()));
@@ -51,7 +50,7 @@ class AuthTest {
         Path file = directory.resolve("database.db");
         try (Database db = new Database(file)) {
             Auth auth = new Auth(db, directory);
-            auth.setup(Files.readString(directory.resolve(".setup-token")), "owner-restore", "Persistent-test-only-pass!", true);
+            AuthFixture.owner(auth,"owner-restore","Persistent-test-only-pass!");
             auth.createUser("viewer", "Viewer-test-only-password!", "Viewer");
             assertThrows(IllegalArgumentException.class, () -> auth.createUser("invalid", "Long-test-only-password!", "Superuser"));
         }
@@ -78,8 +77,7 @@ class AuthTest {
         try(Database db=new Database(file)) {
             Auth auth=new Auth(db,directory,false,true);
             assertTrue(auth.setupRequired());assertEquals(0,db.userCount().get());
-            String token=Files.readString(directory.resolve(".setup-token"));
-            auth.setup(token,"test-owner",originalPassword,true);
+            AuthFixture.owner(auth,"test-owner",originalPassword);
             Auth.Session first=auth.login("test-owner",originalPassword),second=auth.login("test-owner",originalPassword);
             assertEquals("Owner",first.role());
             assertThrows(SecurityException.class,()->auth.changeAccount(first,"incorrect","renamed-owner","Changed-test-only-password!"));
@@ -98,17 +96,18 @@ class AuthTest {
         }
     }
 
-    @Test void disabledBootstrapRequiresPrivateSetup() throws Exception {
+    @Test void oldBootstrapFlagNeverCreatesAUserOrPrivateFileCapability() throws Exception {
         try(Database db=new Database(directory.resolve("database.db"))) {
             Auth auth=new Auth(db,directory,false,true);
             assertTrue(auth.setupRequired());assertEquals(0,db.userCount().get());
-            assertTrue(Files.exists(directory.resolve(".setup-token")));
+            assertFalse(Files.exists(directory.resolve(".setup-token")));
+            Auth enabled=new Auth(db,directory,true,true);assertTrue(enabled.setupRequired());assertEquals(0,db.userCount().get());
         }
     }
 
     @Test void bootstrapPreservesExistingAccountsAndNeverRunsOnLan() throws Exception {
         try(Database db=new Database(directory.resolve("database.db"))) {
-            Auth original=new Auth(db,directory);original.setup(Files.readString(directory.resolve(".setup-token")),"existing-owner","Existing-owner-test-password!",true);
+            Auth original=new Auth(db,directory);AuthFixture.owner(original,"existing-owner","Existing-owner-test-password!");
             original.createUser("admin","Existing-admin-test-password!","Viewer");
             Auth enabled=new Auth(db,directory,true,true);
             assertEquals("Owner",enabled.login("existing-owner","Existing-owner-test-password!").role());
@@ -121,7 +120,7 @@ class AuthTest {
 
     @Test void accountRenamePreservesPasswordRoleAndCollisionCannotModifyEitherAccount() throws Exception {
         try(Database db=new Database(directory.resolve("database.db"))) {
-            Auth auth=new Auth(db,directory);auth.setup(Files.readString(directory.resolve(".setup-token")),"owner","Owner-test-password-only!",true);
+            Auth auth=new Auth(db,directory);AuthFixture.owner(auth,"owner","Owner-test-password-only!");
             auth.createUser("viewer","Viewer-test-password-only!","Viewer");
             Auth.Session viewer=auth.login("viewer","Viewer-test-password-only!");
             assertThrows(IllegalArgumentException.class,()->auth.changeAccount(viewer,"Viewer-test-password-only!","owner",null));

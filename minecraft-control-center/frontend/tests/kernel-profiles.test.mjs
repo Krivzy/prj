@@ -17,3 +17,7 @@ test('Maximum optimization cannot confirm a plan that lowers distance files or i
   const maximum={...plan,profile:'maximum-optimized',customPreservesFiles:false,preservesDistances:true,files:[{path:'spigot.yml',changes:[{key:'world-settings.default.nerf-spawner-mobs',before:false,after:true}]}]};
   assert.equal(canApplyKernelProfile(true,maximum,1000),true);assert.equal(canApplyKernelProfile(true,{...maximum,liveDistances:true},1000),false);assert.equal(canApplyKernelProfile(true,{...maximum,preservesDistances:false},1000),false);assert.equal(canApplyKernelProfile(true,{...maximum,files:[{path:'server.properties',changes:[]}]},1000),false);assert.equal(canApplyKernelProfile(true,{...maximum,files:[{path:'spigot.yml',changes:[{key:'world-settings.default.view-distance',after:4}]}]},1000),false);
 });
+test('Vanilla throughput preserves distances and never invokes live distance setters',()=>{
+  const throughput={...plan,profile:'vanilla-throughput',customPreservesFiles:false,preservesDistances:true,files:[{path:'config/paper-world-defaults.yml',changes:[{key:'chunks.max-auto-save-chunks-per-tick',before:24,after:24}]}]};
+  assert.equal(canApplyKernelProfile(true,throughput,1000),true);assert.equal(canApplyKernelProfile(true,{...throughput,liveDistances:true},1000),false);assert.equal(canApplyKernelProfile(true,{...throughput,preservesDistances:false},1000),false);
+});

@@ -11,12 +11,20 @@ import org.yaml.snakeyaml.constructor.SafeConstructor;
 
 /** Reads metadata without defining classes or executing any code from a downloaded JAR. */
 public final class PluginJar {
+    private static final long EXISTING_JAR_LIMIT=64L*1024*1024,EXISTING_MCC_LIMIT=128L*1024*1024;
     private PluginJar() {}
     public record Metadata(String name,String version,String main,List<String> required,List<String> provides,String apiVersion) {}
     public static Metadata inspect(Path file,String minecraftVersion)throws IOException {
         return inspect(file,minecraftVersion,true);
     }
-    static Metadata inspectExisting(Path file)throws IOException{return inspect(file,"999.999",false);}
+    /** MCC embeds its pinned engine; only that protected identity has the larger local inventory bound. */
+    static Metadata inspectExisting(Path file)throws IOException {
+        if(Files.isSymbolicLink(file)||!Files.isRegularFile(file,LinkOption.NOFOLLOW_LINKS)||Files.size(file)>EXISTING_MCC_LIMIT)throw new IOException("Unsafe or oversized installed plugin JAR");
+        Metadata metadata=inspect(file,"999.999",false);
+        if(Files.size(file)>existingLimit(metadata))throw new IOException("Installed plugin JAR exceeds its identity bound");
+        return metadata;
+    }
+    static long existingLimit(Metadata metadata){return metadata.name().equals("MinecraftControlCenter")&&metadata.main().equals("dev.mcc.MccPlugin")?EXISTING_MCC_LIMIT:EXISTING_JAR_LIMIT;}
     private static Metadata inspect(Path file,String minecraftVersion,boolean download)throws IOException {
         try(ZipFile zip=new ZipFile(file.toFile())) {
             Set<String> names=new HashSet<>();long total=0;int entries=0;

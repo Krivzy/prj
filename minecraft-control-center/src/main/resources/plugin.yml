@@ -7,9 +7,11 @@ description: Embedded real-time Minecraft administration with authenticated web 
 authors: [MCC]
 commands:
   mcc:
-    description: Show MCC status and local dashboard location
-    permission: mcc.status
+    description: Show MCC status or privately initialize the panel from an operator account
 permissions:
+  mcc.setup:
+    description: Initialize the panel using this online Minecraft identity
+    default: op
   mcc.status:
     default: op
   mcc.punishments:

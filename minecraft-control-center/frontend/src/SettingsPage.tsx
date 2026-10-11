@@ -5,6 +5,9 @@ import type {Settings} from './types';
 import {AsyncButton,ErrorBox,Icon,Loading,Panel} from './ui';
 import KernelProfiles from './KernelProfiles';
 import PanelUsers from './PanelUsers';
+import LicenseSettings from './LicenseSettings';
+import MccCoreSettings from './MccCoreSettings';
+import {licenseAllowsModule} from './license-view';
 import './KernelProfiles.css';
 const moduleLabels:Record<string,[string,string,string,string]>={
   chat:['Чат','Chat','История сообщений и live-поток.','Message history and live stream.'],
@@ -29,12 +32,12 @@ export default function SettingsPage(){
     {resource.error&&<ErrorBox error={resource.error} retry={resource.reload}/>} {resource.loading&&!resource.data&&<Loading/>}
     {resource.data&&<div className="two-panels settings-panels"><Panel><div className="panel-heading"><h2>{app.t('Нагрузка MCC','MCC overhead')}</h2><Icon name="dashboard"/></div>
       <div className="profile-options">{[{id:'eco',ru:'Реже обновлять снимки',en:'Less frequent snapshots'},{id:'balanced',ru:'Баланс по умолчанию',en:'Balanced default'},{id:'performance',ru:'Более частые обновления',en:'More frequent updates'}].map(option=><label key={option.id} className={profile===option.id?'selected':''}><input type="radio" name="profile" checked={profile===option.id} onChange={()=>setProfile(option.id)} disabled={!app.administrator}/><span><strong>{option.id}</strong><small>{app.t(option.ru,option.en)}</small></span></label>)}</div>
-      <h3>{app.t('Фоновые модули','Background modules')}</h3><div className="module-list kp-module-list">{Object.entries(modules).map(([key,enabled])=>{const labels=moduleLabels[key]??[key,key,'',''];return <label key={key}><span><strong>{app.t(labels[0],labels[1])}</strong><small>{app.t(labels[2],labels[3])}</small></span><input type="checkbox" checked={enabled} onChange={e=>setModules({...modules,[key]:e.target.checked})} disabled={!app.administrator}/></label>;})}</div>
+      <h3>{app.t('Фоновые модули','Background modules')}</h3><div className="module-list kp-module-list">{Object.entries(modules).map(([key,enabled])=>{const labels=moduleLabels[key]??[key,key,'',''],allowed=licenseAllowsModule(app.auth.license,key);return <label key={key}><span><strong>{app.t(labels[0],labels[1])}{!allowed&&<span className="nav-lock"> · {app.t('Полная версия','Full access')}</span>}</strong><small>{app.t(labels[2],labels[3])}</small></span><input type="checkbox" checked={enabled&&allowed} onChange={e=>setModules({...modules,[key]:e.target.checked})} disabled={!app.administrator||!allowed}/></label>;})}</div>
       <p className="hint settings-module-note">{app.t('Выключенный модуль останавливает свои фоновые задачи и сбор данных, снижая нагрузку на сервер. Сохранённые данные остаются. Вход в панель, настройки и резервные копии продолжают работать.','Disabled modules stop their background tasks and data collection, reducing server load. Saved data stays available. Sign-in, settings and backups keep working.')}</p>
       <AsyncButton className="primary" disabled={!app.administrator} run={save}>{app.t('Сохранить настройки','Save settings')}</AsyncButton></Panel>
       <Panel><div className="panel-heading"><h2>{app.t('Подключение и измерения','Connection and measurements')}</h2><Icon name="settings"/></div><dl className="data-list"><div><dt>Bind address</dt><dd><code>{resource.data.host}</code></dd></div><div><dt>Port</dt><dd>{resource.data.port}</dd></div></dl>
       <p className="hint">{app.t('Адрес и порт меняются в config.yml при остановленном сервере. Значения CPU и RAM относятся ко всей JVM; это не измерение памяти одного MCC.','Change address and port in config.yml while the server is stopped. CPU and RAM cover the entire JVM, not MCC alone.')}</p>
       {resource.data.performance&&<details className="settings-details"><summary>{app.t('Фактические счётчики MCC','Actual MCC counters')}</summary><dl className="data-list">{Object.entries(resource.data.performance).map(([key,value])=><div key={key}><dt>{key}</dt><dd>{typeof value==='object'?JSON.stringify(value):String(value)}</dd></div>)}</dl></details>}
       {resource.data.limits&&<details className="settings-details"><summary>{app.t('Ограничения очередей','Queue limits')}</summary><dl className="data-list">{Object.entries(resource.data.limits).map(([key,value])=><div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>)}</dl></details>}</Panel></div>}
-    {app.administrator&&<KernelProfiles/>}{app.owner&&<PanelUsers/>}</>;
+    <LicenseSettings/><MccCoreSettings/>{app.administrator&&<KernelProfiles/>}{app.owner&&<PanelUsers/>}</>;
 }

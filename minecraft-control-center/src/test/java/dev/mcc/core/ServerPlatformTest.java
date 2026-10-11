@@ -4,6 +4,13 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ServerPlatformTest {
+    @Test void ownCoreBrandRequiresVerifiedRuntimeHandshake() {
+        assertEquals("MCC Core",ServerPlatform.displayBrand("Paper",true));
+        assertEquals("Paper",ServerPlatform.displayBrand("Paper",false));
+        assertEquals("Purpur",ServerPlatform.displayBrand("Purpur",false));
+        assertEquals("Unknown Bukkit server",ServerPlatform.displayBrand(null,false));
+        assertEquals("Unknown Bukkit server",ServerPlatform.displayBrand(" ",false));
+    }
     @Test void minecraftVersionUsesExactBukkitVersionRatherThanBrandOrPluginVersion() {
         assertEquals("26.3", ServerPlatform.parseMinecraftVersion("26.3-R0.1-SNAPSHOT"));
         assertEquals("1.21.11", ServerPlatform.parseMinecraftVersion("1.21.11-R0.1-SNAPSHOT"));

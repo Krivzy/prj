@@ -7,7 +7,10 @@ import java.io.ByteArrayInputStream;
 import java.nio.file.*;
 import java.nio.file.attribute.FileTime;
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -21,6 +24,40 @@ class SavedImageMapTest {
         // One permitted duty-control delay is already 5s; complete scan/pyramid drainage needs additional quanta.
         long deadline=System.currentTimeMillis()+20000;while(System.currentTimeMillis()<deadline&&!condition.getAsBoolean())Thread.sleep(25);
         assertTrue(condition.getAsBoolean(),()->{Map<String,Object> state=map.manifest("world");return phase+": status="+state.get("status")+", pendingTiles="+state.get("pendingTiles")+", scannedAt="+state.get("scannedAt")+", failures="+state.get("failures");});
+    }
+    private static void holdWorker(CountDownLatch release,CountDownLatch interrupted){
+        boolean restoreInterrupt=false;long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);
+        try{while(release.getCount()!=0){long remaining=deadline-System.nanoTime();if(remaining<=0)throw new AssertionError("Fixture worker gate was not released");try{release.await(remaining,TimeUnit.NANOSECONDS);}catch(InterruptedException ex){restoreInterrupt=true;if(interrupted!=null)interrupted.countDown();}}}
+        finally{if(restoreInterrupt)Thread.currentThread().interrupt();}
+    }
+    @Test void readyRemainsHiddenUntilDurableImageCommitCompletes()throws Exception{
+        Path world=folder.resolve("commit-order"),cache=folder.resolve("commit-order-cache");UUID id=UUID.randomUUID();Path marker=cache.resolve(id+"/images-dirty");
+        SavedSurfaceReaderTest.world(world,0,0,SavedSurfaceReaderTest.record("full",0,0,4,true,2),1);
+        CountDownLatch serializing=new CountDownLatch(1),release=new CountDownLatch(1);AtomicBoolean armed=new AtomicBoolean(true);AtomicReference<SavedImageMap> active=new AtomicReference<>();
+        Map<String,Object> spawn=new AbstractMap<>(){
+            @Override public Set<Entry<String,Object>> entrySet(){
+                SavedImageMap current=active.get();
+                if(current!=null&&Thread.currentThread().getName().equals("MCC-map-images")&&Files.exists(marker)&&number(current,"pendingTiles")==0&&number(current,"scannedAt")>0&&armed.compareAndSet(true,false)){serializing.countDown();holdWorker(release,null);}
+                return Map.<String,Object>of("x",0,"y",64,"z",0).entrySet();
+            }
+        };
+        try(SavedImageMap map=new SavedImageMap(cache)){
+            active.set(map);map.register(new SavedImageMap.WorldInfo("world",id,world,"overworld",-64,320,spawn));map.enabled(true);
+            try{assertTrue(serializing.await(20,TimeUnit.SECONDS),"Hold the real final PNG/manifest serialization, with no filesystem lock or production hook");assertEquals("rendering",map.manifest("world").get("status"),"A completed render queue is still busy until durable commit and journal cleanup finish");assertTrue(Files.exists(marker));}
+            finally{release.countDown();}
+            awaitRecovery(()->"ready".equals(map.manifest("world").get("status")));
+            assertFalse(Files.exists(marker));Map<String,Object> persisted=dev.mcc.core.Json.object(Files.readString(cache.resolve(id+"/manifest.json")));assertEquals("ready",persisted.get("status"));assertEquals(1,((Number)persisted.get("imageCoherenceVersion")).intValue());assertEquals(0,((Number)persisted.get("pendingTiles")).intValue());assertNotNull(map.tile("world",1,0,-1));
+        }finally{release.countDown();}
+    }
+    @Test void closeWaitsForAnInterruptedActiveWorkerBeforeReturning()throws Exception{
+        Path world=folder.resolve("quiescent-close"),cache=folder.resolve("quiescent-close-cache");UUID id=UUID.randomUUID();SavedSurfaceReaderTest.world(world,0,0,SavedSurfaceReaderTest.record("full",0,0,4,true,2),1);
+        CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1),interrupted=new CountDownLatch(1);AtomicBoolean armed=new AtomicBoolean();AtomicReference<Thread> actualWorker=new AtomicReference<>();
+        SavedImageMap map=new SavedImageMap(cache,()->{if(armed.compareAndSet(true,false)){actualWorker.set(Thread.currentThread());entered.countDown();holdWorker(release,interrupted);}return System.currentTimeMillis();});ExecutorService closer=Executors.newSingleThreadExecutor();
+        try{
+            map.register(info(world,id));map.enabled(true);awaitRecovery(()->"ready".equals(map.manifest("world").get("status")));armed.set(true);assertTrue(entered.await(8,TimeUnit.SECONDS));
+            Future<?> stopped=closer.submit(map::close);assertTrue(interrupted.await(2,TimeUnit.SECONDS),"Shutdown must interrupt the actual scheduled image worker");assertThrows(TimeoutException.class,()->stopped.get(200,TimeUnit.MILLISECONDS),"close cannot return while the image worker still owns cache files");release.countDown();stopped.get(3,TimeUnit.SECONDS);actualWorker.get().join(1000);assertFalse(actualWorker.get().isAlive());
+            Path marker=cache.resolve(id+"/images-dirty");Files.write(marker,new byte[]{1});byte[] manifest=Files.readAllBytes(cache.resolve(id+"/manifest.json"));Thread.sleep(150);assertTrue(Files.exists(marker),"A stopped worker cannot delete the next generation's recovery marker");assertArrayEquals(manifest,Files.readAllBytes(cache.resolve(id+"/manifest.json")));
+        }finally{release.countDown();map.close();closer.shutdownNow();assertTrue(closer.awaitTermination(3,TimeUnit.SECONDS));}
     }
     @Test void viewerCannotEnqueueTerrainWorkWhenBackgroundPaused()throws Exception{
         Path world=folder.resolve("world"),cache=folder.resolve("cache");Path region=SavedSurfaceReaderTest.world(world,0,0,SavedSurfaceReaderTest.record("full",0,0,4,true,2),1);byte[] original=Files.readAllBytes(region);
@@ -120,7 +157,7 @@ class SavedImageMapTest {
         Path world=folder.resolve("interrupted-parent"),cache=folder.resolve("interrupted-parent-cache");UUID id=UUID.randomUUID();SavedSurfaceReaderTest.world(world,0,0,SavedSurfaceReaderTest.record("full",0,0,4,true,2),1);String baseBefore,parentBefore;
         try(SavedImageMap map=new SavedImageMap(cache)){map.register(info(world,id));map.enabled(true);await(()->"ready".equals(map.manifest("world").get("status")));baseBefore=map.tile("world",0,0,-1).etag();parentBefore=map.tile("world",1,0,-1).etag();}
         Files.write(cache.resolve(id+"/images-dirty"),new byte[]{1});Files.delete(cache.resolve(id+"/tiles/1/0_-1.png"));
-        try(SavedImageMap map=new SavedImageMap(cache)){map.register(info(world,id));map.enabled(true);awaitRecovery(()->"ready".equals(map.manifest("world").get("status")));assertEquals(baseBefore,map.tile("world",0,0,-1).etag());assertEquals(parentBefore,map.tile("world",1,0,-1).etag());}
+        try(SavedImageMap map=new SavedImageMap(cache)){map.register(info(world,id));map.enabled(true);awaitRecovery(()->"ready".equals(map.manifest("world").get("status")));assertFalse(Files.exists(cache.resolve(id+"/images-dirty")),"Ready implies durable recovery completion before close");assertEquals("ready",dev.mcc.core.Json.object(Files.readString(cache.resolve(id+"/manifest.json"))).get("status"));assertEquals(baseBefore,map.tile("world",0,0,-1).etag());assertEquals(parentBefore,map.tile("world",1,0,-1).etag());}
     }
     @Test void interruptedFullToProtoRemovalClearsUnreferencedOldTiles()throws Exception{
         Path world=folder.resolve("interrupted-remove"),cache=folder.resolve("interrupted-remove-cache");UUID id=UUID.randomUUID();AtomicLong time=new AtomicLong(System.currentTimeMillis());SavedSurfaceReaderTest.world(world,0,0,SavedSurfaceReaderTest.record("full",0,0,4,true,2),1);String baseBefore;

@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "scope": "incomplete-session-poststop-terrain-summary",
+  "status": "INCOMPLETE",
+  "sourceSessionPassed": false,
+  "sourceSessionSha256": "41faf6a06701bafc358a3939bf4feeb1a774f4dd4440f180678037684b14e0f1",
+  "sourceDiagnosticsIndexSha256": "273350863e37a72075a511d10bbcc8772f7eccb74a00d06679a63d90fa25a064",
+  "completedPairComparisons": 3,
+  "generatedChunksPerKernel": 128,
+  "blockPairsComparedAcrossThreeReports": 37748736,
+  "originalLiveHashGuardChanged": false,
+  "fluidsOrBlockPropertiesFiltered": false,
+  "performanceVerdictEstablished": false,
+  "snapshotStage": "after normal stop; not the earlier live digest",
+  "reports": [
+    {
+      "repetition": 0,
+      "leftCore": "Paper",
+      "rightCore": "MCC-Core",
+      "allBlocksCompared": 12582912,
+      "differentBlocks": 0,
+      "originalDigestSampleDifferentBlocks": 0,
+      "biomeNbtDifferentChunks": 0,
+      "categories": {},
+      "hashGuardUnchanged": true,
+      "sourceFullReportSha256": "c88ba4b62a74f36ae8478374a552253ad87c3955a9a4c1201e040196ad1cbadb",
+      "savedCoordinateSampleLimit": 2000
+    },
+    {
+      "repetition": 0,
+      "leftCore": "Paper",
+      "rightCore": "Purpur",
+      "allBlocksCompared": 12582912,
+      "differentBlocks": 0,
+      "originalDigestSampleDifferentBlocks": 0,
+      "biomeNbtDifferentChunks": 0,
+      "categories": {},
+      "hashGuardUnchanged": true,
+      "sourceFullReportSha256": "61f16bc7a464d16eb3f1ce6cf8364913d5eb4efddf317ec67132fa2f6ef0e57d",
+      "savedCoordinateSampleLimit": 2000
+    },
+    {
+      "repetition": 0,
+      "leftCore": "MCC-Core",
+      "rightCore": "Purpur",
+      "allBlocksCompared": 12582912,
+      "differentBlocks": 0,
+      "originalDigestSampleDifferentBlocks": 0,
+      "biomeNbtDifferentChunks": 0,
+      "categories": {},
+      "hashGuardUnchanged": true,
+      "sourceFullReportSha256": "7c56daaea427a0186abc24a9ff943fb5a44430083cd157a4e382fb387d2821e9",
+      "savedCoordinateSampleLimit": 2000
+    }
+  ],
+  "limits": [
+    "These observations cover the chosen generated chunks, not every world, entity, lighting state or vanilla mechanic.",
+    "One completed kernel pair cannot replace the planned three independent paired repetitions or establish a performance ranking."
+  ]
+}

@@ -1,0 +1,22 @@
+// Optional bounded microbenchmark on the exact pinned Paper checkout.
+gradle.projectsEvaluated {
+    def server = rootProject.project(':paper-server')
+    def bundle = new File(System.getProperty('mcc.hotpaths.bundle'))
+    def output = new File(System.getProperty('mcc.hotpaths.output'))
+    def classes = server.layout.buildDirectory.dir('mcc-hotpaths/classes')
+    server.tasks.register('compileMccHotpaths', JavaCompile) {
+        source = server.fileTree(new File(bundle, 'benchmark')) { include '**/*.java' }
+        classpath = server.sourceSets.test.runtimeClasspath
+        destinationDirectory = classes
+        options.release = 25
+        options.encoding = 'UTF-8'
+        dependsOn server.tasks.named('testClasses')
+    }
+    server.tasks.register('mccHotpaths', JavaExec) {
+        dependsOn server.tasks.named('compileMccHotpaths')
+        classpath = server.files(classes) + server.sourceSets.test.runtimeClasspath
+        mainClass = 'dev.mcc.core.engine.MccHotpathBenchmark'
+        jvmArgs '-Xms128m', '-Xmx384m', '-XX:+UseG1GC', '--enable-native-access=ALL-UNNAMED'
+        args output.absolutePath
+    }
+}

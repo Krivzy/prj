@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import uuid
+import zipfile
 
 PROTOCOL = 2
 MAX_COMMAND_LINE = 4096
@@ -257,10 +258,25 @@ def validate_jvm_arguments(values):
 def server_command(args, root, control, run_id, hook_passed):
     command = [str(Path(args.java).resolve()), f'-Xms{args.min_memory_mib}M',
                f'-Xmx{args.memory_mib}M', '-Dterminal.ansi=false', *args.jvm_arg,
-               '-Dmcc.launcher.control=' + str(control), '-Dmcc.launcher.run-id=' + run_id]
+               '-Dmcc.launcher.control=' + str(control), '-Dmcc.launcher.run-id=' + run_id,
+               '-Dmcc.launcher.server-jar=' + args.server_jar]
     if hook_passed:
         command.append('-Dmcc.launcher.profile-hook=true')
     return command + ['-jar', str(root / args.server_jar), '--nogui', '--nojline']
+
+
+def core_hook_supported(plugin):
+    """Preserve rollback compatibility with the earlier ProfileBootstrap argument contract."""
+    try:
+        with zipfile.ZipFile(plugin) as archive:
+            item = archive.getinfo('META-INF/mcc-core-plugin.properties')
+            if not 0 < item.file_size <= 1024:
+                return False
+            fields = dict(line.split('=', 1) for line in archive.read(item).decode('ascii').splitlines()
+                          if '=' in line and not line.startswith('#'))
+            return fields.get('protocol') == '1' and fields.get('main') == 'dev.mcc.MccPlugin'
+    except (OSError, KeyError, ValueError, UnicodeError, zipfile.BadZipFile):
+        return False
 
 
 def profile_command(args, root):
@@ -271,10 +287,13 @@ def profile_command(args, root):
         return None
     ordinary(root / 'plugins', True)
     ordinary(plugin)
-    return [str(Path(args.java).resolve()), '-Xms64M', '-Xmx256M', *args.jvm_arg,
+    command = [str(Path(args.java).resolve()), '-Xms64M', '-Xmx256M', *args.jvm_arg,
             '-cp', str(plugin), 'dev.mcc.server.ProfileBootstrap', '--offline',
             '--server-root', str(root), '--plugin-data', str(root / 'plugins' / 'MinecraftControlCenter'),
             '--kernel', args.kernel_name, '--minecraft-version', args.minecraft_version]
+    if core_hook_supported(plugin):
+        command.extend(['--server-jar', args.server_jar])
+    return command
 
 
 class Supervisor:

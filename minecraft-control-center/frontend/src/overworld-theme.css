@@ -34,7 +34,7 @@ body{min-width:320px;background:var(--bg);line-height:1.5}button{font:inherit}h1
 
 /* Shared feature controls use the same stone surfaces as the operator workspace. */
 .nav-item{padding-right:30px}
-.nav-item>span:not(.nav-selection){min-width:0;flex:1}
+.nav-item>.nav-label{min-width:0;flex:1;line-height:1.4;overflow-wrap:anywhere}
 .nav-pixel{position:absolute;right:12px;top:50%;margin:0;transform:translateY(-50%)}
 .sidebar-mobile-actions{display:none}
 .main-content .world-tile{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;background:var(--surface);border-color:#4c5957;border-radius:5px;min-width:0}
@@ -126,7 +126,7 @@ body{min-width:320px;background:var(--bg);line-height:1.5}button{font:inherit}h1
   .sidebar.is-open .nav-group{display:block;margin-bottom:15px}
   .sidebar.is-open .nav-group-label{padding-inline:12px;font-size:11px}
   .sidebar.is-open .nav-item{display:flex;flex-direction:row;justify-content:flex-start;gap:12px;width:100%;min-width:0;min-height:44px;padding:10px 30px 10px 12px;border-radius:3px}
-  .sidebar.is-open .nav-item>span:not(.nav-selection){display:block;min-width:0;flex:1;font-size:14px;line-height:1.4}
+  .sidebar.is-open .nav-item>.nav-label{display:block;min-width:0;flex:1;font-size:14px;line-height:1.4}
   .sidebar.is-open .nav-selection{display:block}
   .sidebar.is-open .nav-pixel{display:block}
 }

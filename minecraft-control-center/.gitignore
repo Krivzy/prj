@@ -1,6 +1,10 @@
 /server/
 .gradle/
 build/
+generated/
+core-engine/.work/
+core-engine/build/
+core-engine/__pycache__/
 frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo

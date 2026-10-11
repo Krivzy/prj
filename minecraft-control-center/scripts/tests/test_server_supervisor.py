@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import uuid
+import zipfile
 
 SOURCE = Path(__file__).resolve().parents[1] / 'Server-Supervisor.py'
 SPEC = importlib.util.spec_from_file_location('mcc_supervisor', SOURCE)
@@ -177,6 +178,7 @@ class ArgumentsTests(unittest.TestCase):
         self.assertIn('-Xmx2048M', command)
         self.assertIn('-Dmcc.launcher.run-id=' + RUN, command)
         self.assertIn('-Dmcc.launcher.control=' + str(root / '.mcc-launcher'), command)
+        self.assertIn('-Dmcc.launcher.server-jar=spigot.jar', command)
         self.assertIn('-Dmcc.launcher.profile-hook=true', command)
         self.assertEqual(['-jar', str(root / 'spigot.jar'), '--nogui', '--nojline'], command[-4:])
         self.assertIn('-XX:-G1UseTimeBasedHeapSizing', command)
@@ -187,7 +189,7 @@ class ArgumentsTests(unittest.TestCase):
                    ('--server-jar', 'nested/server.jar'), ('--server-jar', 'paper.zip'),
                    ('--memory-mib', '511'), ('--memory-mib', '33000'), ('--min-memory-mib', '2000'),
                    ('--run-id', '1-1-1-1-1'), ('--kernel-name', 'Paper\nexit'),
-                   ('--jvm-arg=-Dmcc.launcher.run-id=other',), ('--jvm-arg=-Xmx5G',),
+                   ('--jvm-arg=-Dmcc.launcher.run-id=other',), ('--jvm-arg=-Dmcc.launcher.server-jar=other.jar',), ('--jvm-arg=-Xmx5G',),
                    ('--jvm-arg=-jar',), ('--max-crash-restarts', '4')]
         for value in invalid:
             with self.subTest(value=value), patch('sys.stderr', io.StringIO()):
@@ -205,6 +207,21 @@ class ArgumentsTests(unittest.TestCase):
             self.assertEqual(['--offline', '--server-root', str(root), '--plugin-data',
                               str(root / 'plugins' / 'MinecraftControlCenter'), '--kernel', 'Spigot',
                               '--minecraft-version', '26.3'], command[6:])
+
+    def test_core_hook_scope_is_passed_only_to_a_compatible_plugin(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'plugins').mkdir()
+            plugin = root / 'plugins' / 'MinecraftControlCenter.jar'
+            for contract, supported in [(None, False), (b'protocol=2\nmain=dev.mcc.MccPlugin\n', False),
+                                        (b'protocol=1\nmain=dev.mcc.MccPlugin\n', True)]:
+                with zipfile.ZipFile(plugin, 'w') as archive:
+                    if contract is not None:
+                        archive.writestr('META-INF/mcc-core-plugin.properties', contract)
+                command = launcher.profile_command(args('--server-jar', 'core.jar'), root)
+                self.assertEqual(supported, '--server-jar' in command)
+                if supported:
+                    self.assertEqual(['--server-jar', 'core.jar'], command[-2:])
 
     def test_prior_java_liveness_blocks_orphans_without_overwriting_status(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -10,28 +10,33 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class Auth {
-    public record Session(String id,String name,String role,String csrf,long expires,boolean defaultPassword) {}
+    public record Session(String id,String name,String role,String csrf,long expires,boolean defaultPassword) {
+        @Override public String toString(){return "AuthSession[name="+name+", role="+role+"]";}
+    }
     private static final SecureRandom RANDOM=new SecureRandom();
     private final Database db;
     private final ConcurrentHashMap<String,Session> sessions=new ConcurrentHashMap<>();
     private final AtomicBoolean setupRequired=new AtomicBoolean();
-    private final Path tokenFile;
-    private volatile String setupToken;
+    private volatile String legacySetupHash;
     private final Semaphore hashing = new Semaphore(2);
     private final Set<String> defaultAccounts=ConcurrentHashMap.newKeySet();
     public Auth(Database db,Path directory) throws Exception {
         this(db,directory,false,true);
     }
     public Auth(Database db,Path directory,boolean bootstrapAdmin,boolean loopbackOnly) throws Exception {
-        this.db=db;tokenFile=directory.resolve(".setup-token");
-        // A public default may bootstrap only an empty loopback installation. Existing accounts are preserved.
-        if(bootstrapAdmin&&loopbackOnly&&db.userCount().get()==0)db.bootstrapAdmin(limitedHash("admin")).get();
-        for(Map<String,Object> account:db.documents("auth-default-account").get())defaultAccounts.add((String)account.get("name"));
-        setupRequired.set(db.userCount().get()==0);
-        if(setupRequired.get()){
-            setupToken=token();Files.writeString(tokenFile,setupToken,StandardCharsets.UTF_8);
-            PrivateFiles.restrict(tokenFile,false);
-        } else if(Files.exists(tokenFile)) {Files.delete(tokenFile);}
+        this.db=db;
+        // The old option is ignored: fresh installations never get a public username/password.
+        int count=db.userCount().get();
+        for(Map<String,Object> marker:db.documents("auth-default-account").get()){
+            String name=(String)marker.get("name");Map<String,Object> account=db.user(name).get();
+            if(account!=null&&verify("admin",(String)account.get("hash")))defaultAccounts.add(name);
+        }
+        if(count==1&&defaultAccounts.contains("admin")){
+            Map<String,Object> account=db.user("admin").get();if("Owner".equals(account.get("role")))legacySetupHash=(String)account.get("hash");
+        }
+        setupRequired.set(count==0||legacySetupHash!=null);
+        // Retire the old file capability. The operator's short-lived game link is the sole web setup path.
+        Files.deleteIfExists(directory.resolve(".setup-token"));
     }
     public static String token(){byte[] bytes=new byte[32];RANDOM.nextBytes(bytes);return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);}
     public static void validateCredentials(String name,String password){
@@ -55,9 +60,16 @@ public final class Auth {
     }catch(Exception e){return false;}}
     private String limitedHash(String password){if(!hashing.tryAcquire())throw new IllegalStateException("Authentication busy, retry shortly");try{return hash(password);}finally{hashing.release();}}
     public synchronized Session setup(String token,String name,String password,boolean local) throws Exception {
-        if(!local||!setupRequired.get()||!constant(token,setupToken))throw new SecurityException("Local setup token is required");
-        validateCredentials(name,password);db.createUser(name,limitedHash(password),"Owner",true).get();
-        setupRequired.set(false);setupToken=null;Files.deleteIfExists(tokenFile);return createSession(name,"Owner");
+        throw new SecurityException("Private-file setup was retired; use an authorized player's /mcc setup link");
+    }
+    synchronized Session completeSetup(UUID player,String name,String password,Map<String,Object> license,Map<String,Object> preferences)throws Exception{
+        return completeSetup(player,name,password,license,preferences,()->true);
+    }
+    synchronized Session completeSetup(UUID player,String name,String password,Map<String,Object> license,Map<String,Object> preferences,Callable<Boolean> authority)throws Exception{
+        if(!setupRequired.get())throw new SecurityException("Initial setup is already complete");validateCredentials(name,password);
+        String encoded=limitedHash(password);if(!authority.call())throw new SecurityException("Setup player authority changed while securing the password");
+        db.completeSetup(name,encoded,player,legacySetupHash,license,preferences,authority).get();
+        setupRequired.set(false);legacySetupHash=null;defaultAccounts.remove("admin");sessions.clear();return createSession(name,"Owner");
     }
     public synchronized Session login(String name,String password) throws Exception {
         return login(name,password,true);
@@ -69,6 +81,7 @@ public final class Auth {
             // Unknown users still pay a KDF cost to reduce username enumeration.
             boolean match=user==null?constant(hash(password),stored):verify(password,stored);
             if(!match)throw new SecurityException("Invalid credentials");
+            if(setupRequired.get())throw new SecurityException("Use an authorized player's /mcc setup link to replace the initial account");
             if(defaultAccounts.contains(name)&&!local)throw new SecurityException("Change the initial password locally before remote access");
             return createSession(name,(String)user.get("role"));
         }finally{hashing.release();}
@@ -101,6 +114,7 @@ public final class Auth {
             String oldHash=(String)stored.get("hash"),newHash=changePassword?hash(newPassword):oldHash;
             if(!db.changeUser(session.name(),oldHash,name,newHash,changePassword).get())throw new SecurityException("Account changed concurrently; log in again");
             boolean hadDefault=defaultAccounts.remove(session.name());if(hadDefault&&!changePassword)defaultAccounts.add(name);
+            if(changePassword&&legacySetupHash!=null&&session.name().equals("admin")){legacySetupHash=null;setupRequired.set(false);}
             sessions.values().removeIf(existing->existing.name().equals(session.name()));
             return createSession(name,(String)stored.get("role"));
         }finally{hashing.release();}
@@ -111,5 +125,5 @@ public final class Auth {
     public void cleanup(){long now=System.currentTimeMillis();sessions.values().removeIf(s->s.expires()<now);}
     public boolean setupRequired(){return setupRequired.get();}
     public static boolean constant(String a,String b){return a!=null&&b!=null&&MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8),b.getBytes(StandardCharsets.UTF_8));}
-    public Map<String,Object> status(Session s){Map<String,Object> out=new LinkedHashMap<>();out.put("setupRequired",setupRequired());out.put("authenticated",s!=null);out.put("defaultAdminAvailable",s==null&&defaultAccounts.contains("admin"));out.put("defaultPassword",s!=null&&s.defaultPassword());out.put("user",s==null?null:Map.of("name",s.name(),"role",s.role()));out.put("csrf",s==null?null:s.csrf());return out;}
+    public Map<String,Object> status(Session s){Map<String,Object> out=new LinkedHashMap<>();out.put("setupRequired",setupRequired());out.put("authenticated",s!=null);out.put("defaultAdminAvailable",false);out.put("defaultPassword",s!=null&&s.defaultPassword());out.put("mustChangePassword",s!=null&&s.defaultPassword());out.put("user",s==null?null:Map.of("name",s.name(),"role",s.role()));out.put("csrf",s==null?null:s.csrf());return out;}
 }

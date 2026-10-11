@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'dev.mcc'
-version = '0.9.0'
+version = '0.10.0'
 
 repositories {
     mavenCentral()
@@ -37,6 +37,43 @@ tasks.withType(JavaCompile).configureEach {
 
 def windows = System.getProperty('os.name').toLowerCase().contains('windows')
 def skipFrontend = providers.gradleProperty('skipFrontend').map { it.toBoolean() }.orElse(false)
+def coreFoundation = providers.gradleProperty('coreFoundation').map { file(it) }.orElse(file('generated/core-engine/MCC-Core-engine-0.2.0-26.3.jar'))
+def coreFoundationSha = '86c96263ba9a6257cc8b03e8e8fd8f90ee03fedb396918ed1fa1f74ebe196223'
+def hashStream = { InputStream input ->
+    def digest = java.security.MessageDigest.getInstance('SHA-256')
+    byte[] buffer = new byte[262144]
+    for (int count; (count = input.read(buffer)) >= 0;) { if (count > 0) digest.update(buffer, 0, count) }
+    digest.digest().encodeHex().toString()
+}
+
+tasks.register('verifyCoreFoundation') {
+    group = 'verification'
+    description = 'Verify the pinned MCC Core engine before embedding it without unpacking it.'
+    inputs.file(coreFoundation)
+    doLast {
+        def foundation = coreFoundation.get()
+        if (!foundation.isFile() || foundation.length() != 55980330L) throw new GradleException('Build MCC Core first: see core-engine/README.md; the exact pinned engine is required.')
+        def hash = foundation.withInputStream { hashStream(it) }
+        if (hash != coreFoundationSha) throw new GradleException('MCC Core engine SHA-256 does not match the verified release foundation.')
+        new java.util.jar.JarFile(foundation).withCloseable { jar ->
+            def entry = jar.getJarEntry('META-INF/mcc-engine.properties')
+            if (entry == null || entry.size > 4096L) throw new GradleException('MCC Core engine provenance is absent or oversized.')
+            def metadata = new Properties()
+            jar.getInputStream(entry).withCloseable { input ->
+                byte[] bytes = input.readNBytes(4097)
+                if (bytes.length > 4096) throw new GradleException('MCC Core engine provenance exceeds its bound.')
+                metadata.load(new ByteArrayInputStream(bytes))
+            }
+            [ 'engine.name': 'MCC Core', 'engine.version': '0.2.0', 'upstream.name': 'Paper', 'upstream.minecraft': '26.3',
+              'upstream.commit': '46d4834e8e2ec4af9dcfa028076fb16dfb8a3911',
+              'patchset.sha256': '3d42ace4d8f3a14bb7765cb173da0bcd06aa7a6533bd33e4e8892a50d0ca3c6f',
+              'tick.owner': 'paper-main-thread',
+              'features': 'bounded-ore-scratch,nbt-fast-entries,contiguous-long-encoding,chunk-snapshot-loops,palette-layout' ].each { key, expected ->
+                if (metadata.getProperty(key) != expected) throw new GradleException("MCC Core provenance mismatch: ${key}")
+            }
+        }
+    }
+}
 def npmCommand = { List<String> arguments ->
     if (providers.gradleProperty('npmCli').isPresent()) {
         return [providers.gradleProperty('nodeExecutable').getOrElse('node'), providers.gradleProperty('npmCli').get()] + arguments
@@ -79,8 +116,11 @@ tasks.register('frontendTest', Exec) {
 }
 
 tasks.named('processResources') {
-    dependsOn 'frontendBuild'
+    dependsOn 'frontendBuild', 'verifyCoreFoundation'
     from('frontend/dist') { into 'web' }
+    from(coreFoundation) { into 'mcc-core'; rename { 'engine-0.2.0.jar' } }
+    from('core-engine') { include 'LICENSE.md', 'THIRD-PARTY.md'; into 'META-INF/mcc-core-licenses' }
+    from('core-engine/licenses') { include '*.md', '*.txt'; into 'META-INF/mcc-core-licenses/upstream' }
     filesMatching('plugin.yml') { expand(version: project.version) }
     doFirst {
         if (!file('frontend/dist/index.html').isFile()) {
@@ -119,7 +159,7 @@ tasks.register('distributionChecksum') {
     inputs.file(artifact)
     outputs.file(layout.buildDirectory.file('libs/MinecraftControlCenter.jar.sha256'))
     doLast {
-        def hash = java.security.MessageDigest.getInstance('SHA-256').digest(artifact.get().asFile.bytes).encodeHex().toString()
+        def hash = artifact.get().asFile.withInputStream { hashStream(it) }
         layout.buildDirectory.file('libs/MinecraftControlCenter.jar.sha256').get().asFile.setText("${hash}  MinecraftControlCenter.jar\n", 'UTF-8')
     }
 }
@@ -135,12 +175,17 @@ tasks.register('verifyDistribution') {
     description = 'Verify that the deliverable contains plugin metadata, backend, dependencies and frontend.'
     dependsOn 'shadowJar'
     doLast {
-        def jar = zipTree(tasks.shadowJar.archiveFile.get().asFile)
-        ['plugin.yml', 'dev/mcc/MccPlugin.class', 'web/index.html', 'org/sqlite/JDBC.class'].each { name ->
-            if (jar.matching { include name }.isEmpty()) throw new GradleException("Missing JAR entry: ${name}")
+        new java.util.jar.JarFile(tasks.shadowJar.archiveFile.get().asFile).withCloseable { jar ->
+            ['plugin.yml', 'dev/mcc/MccPlugin.class', 'web/index.html', 'org/sqlite/JDBC.class', 'mcc-core/engine-0.2.0.jar',
+             'META-INF/mcc-core-licenses/LICENSE.md', 'META-INF/mcc-core-licenses/THIRD-PARTY.md'].each { name ->
+                if (jar.getJarEntry(name) == null) throw new GradleException("Missing JAR entry: ${name}")
+            }
+            def names = jar.entries().collect { it.name }
+            if (!names.any { it.startsWith('web/assets/') && it.endsWith('.js') }) throw new GradleException('Missing compiled JavaScript')
+            if (names.any { it.startsWith('org/bukkit/') || it.startsWith('io/papermc/paper/') }) throw new GradleException('Paper API must not be bundled')
+            def engine = jar.getJarEntry('mcc-core/engine-0.2.0.jar')
+            if (engine.size != 55980330L || jar.getInputStream(engine).withCloseable { hashStream(it) } != coreFoundationSha) throw new GradleException('Bundled MCC Core engine is not the pinned verified foundation.')
         }
-        if (!jar.matching { include 'web/assets/*.js' }.files) throw new GradleException('Missing compiled JavaScript')
-        if (jar.matching { include 'org/bukkit/**', 'io/papermc/paper/**' }.files) throw new GradleException('Paper API must not be bundled')
     }
 }
 tasks.named('check') { dependsOn 'verifyDistribution', 'frontendTest' }

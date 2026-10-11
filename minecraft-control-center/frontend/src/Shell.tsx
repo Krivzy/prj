@@ -5,7 +5,9 @@ import {useApp} from './context';
 import {roleLabel} from './roleLabel';
 import type {Page} from './context';
 import {useLive} from './live';
-import {availablePages, pages} from './navigation';
+import {availablePages,navigationPages,pages} from './navigation';
+import {licenseAllowsPage} from './license-view';
+import './license-ui.css';
 import {Icon, Modal} from './ui';
 
 export function Brand() {
@@ -21,9 +23,10 @@ export default function Shell({page, changeLang, profile, logout, children}: {
   const [menu, setMenu] = useState(false);
   const [commands, setCommands] = useState(false);
   const [query, setQuery] = useState('');
-  const entries = availablePages(app.auth.user?.role ?? 'Viewer',app.integrationIds,app.modules);
+  const entries = navigationPages(app.auth.user?.role ?? 'Viewer',app.integrationIds,app.modules,app.auth.license);
+  const accessibleEntries=availablePages(app.auth.user?.role??'Viewer',app.integrationIds,app.modules,app.auth.license);
   const title = pages.find(item => item.id === page);
-  const results = entries.filter(item => item[app.lang].toLowerCase().includes(query.toLowerCase()));
+  const results = accessibleEntries.filter(item => item[app.lang].toLowerCase().includes(query.toLowerCase()));
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
@@ -45,14 +48,15 @@ export default function Shell({page, changeLang, profile, logout, children}: {
         <nav aria-label={app.t('Разделы', 'Sections')}>
           {[0,1,2].map(group => <div className="nav-group" key={group}>
             <span className="nav-group-label">{group === 0 ? app.t('Твой сервер','Your server') : group === 1 ? app.t('Управление','Control') : app.t('Система','System')}</span>
-            {entries.filter(item => item.group === group).map(item => <button key={item.id} className={`nav-item ${page === item.id ? 'selected' : ''}`} onClick={() => navigate(item.id)} aria-label={item[app.lang]} aria-current={page === item.id ? 'page' : undefined}>
+            {entries.filter(item => item.group === group).map(item => <button key={item.id} disabled={!licenseAllowsPage(app.auth.license,item.id)} className={`nav-item ${page === item.id ? 'selected' : ''} ${!licenseAllowsPage(app.auth.license,item.id)?'license-locked':''}`} onClick={() => navigate(item.id)} aria-label={item[app.lang]+(!licenseAllowsPage(app.auth.license,item.id)?app.t(' — требуется полная версия',' — requires full access'):'')} aria-current={page === item.id ? 'page' : undefined} title={!licenseAllowsPage(app.auth.license,item.id)?app.t('Доступно в полной версии','Available with full access'):undefined}>
               {page === item.id && <motion.span className="nav-selection" layoutId="navigation-active" transition={{type:'spring', stiffness:420, damping:38}}/>}
-              <Icon name={item.id} size={18}/><span>{item[app.lang]}</span>{page === item.id && <i className="nav-pixel"/>}
+              <Icon name={item.id} size={18}/><span className="nav-label">{item[app.lang]}</span>{!licenseAllowsPage(app.auth.license,item.id)&&<svg className="nav-lock" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" aria-hidden="true"><path d="M4 6V4a3 3 0 0 1 6 0v2M2.5 6.5h9v6h-9z"/><path d="M7 9v1.5"/></svg>}{page === item.id && <i className="nav-pixel"/>}
             </button>)}
           </div>)}
         </nav>
+        {app.auth.license&&<div className="license-mode-badge"><i/>{app.auth.license.fullAccess?app.t('Временная полная версия','Temporary full access'):app.t('Пробная версия · 4 раздела','Trial access · 4 sections')}</div>}
         <div className="sidebar-end"><span className="sidebar-world-line"/><p>{app.t('Большие идеи.\nБесконечный мир.','Big ideas.\nAn infinite world.')}</p><span className="sidebar-caption">One world. Your rules.</span></div>
-        <div className="sidebar-mobile-actions"><button className="nav-item" onClick={logout}><Icon name="logout" size={18}/><span>{app.t('Выйти из панели','Sign out')}</span></button></div>
+        <div className="sidebar-mobile-actions"><button className="nav-item" onClick={logout}><Icon name="logout" size={18}/><span className="nav-label">{app.t('Выйти из панели','Sign out')}</span></button></div>
       </aside>
       <div className="workspace">
         <header className="topbar">

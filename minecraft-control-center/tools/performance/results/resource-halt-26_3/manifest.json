@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "scope": "incomplete-resource-halt-export",
+  "status": "INCOMPLETE",
+  "files": [
+    {
+      "file": "Paper-rep0-ticks.csv",
+      "sha256": "d00a3f5bbfde84f825dd924406f99567e317f0032c2ac5216d1a84f7fdc89e30",
+      "bytes": 232312
+    },
+    {
+      "file": "MCC-Core-rep0-ticks.csv",
+      "sha256": "ab12237575df71c7ed13de4231624347172afa77205c8abf1ab10a758b7d4321",
+      "bytes": 232476
+    },
+    {
+      "file": "Purpur-rep0-ticks.csv",
+      "sha256": "1e4e565a4fc326aeaf840c00f2fb885fb45c5412de5f86eec5ed410eb39c3d73",
+      "bytes": 232002
+    },
+    {
+      "file": "observations.json",
+      "sha256": "3c988b767cd4275b097f4a58c9e71b0cca7ecdc3754384a8171b5288da21a6fc",
+      "bytes": 16317
+    }
+  ],
+  "sourceSessionSha256": "41faf6a06701bafc358a3939bf4feeb1a774f4dd4440f180678037684b14e0f1",
+  "sourceLogOrWorldPublished": false
+}

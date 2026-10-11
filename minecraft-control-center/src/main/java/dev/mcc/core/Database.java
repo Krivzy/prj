@@ -117,6 +117,31 @@ public final class Database implements AutoCloseable {
             c.commit();return null;
         } catch(Exception e){c.rollback();throw e;}finally{c.setAutoCommit(true);}});
     }
+    /** Owner identity, onboarding preferences and entitlement mode share one serialized transaction. */
+    public CompletableFuture<Void> completeSetup(String name,String hash,UUID uuid,String expectedLegacyHash,Map<String,Object> license,Map<String,Object> preferences,Callable<Boolean> authority){
+        return submit(c->{c.setAutoCommit(false);try{
+            if(!authority.call())throw new SecurityException("Setup player authority changed before commit");
+            int count;try(Statement s=c.createStatement();ResultSet r=s.executeQuery("SELECT count(*) FROM users")){r.next();count=r.getInt(1);}
+            if(count==0){try(PreparedStatement s=c.prepareStatement("INSERT INTO users VALUES(?,?,'Owner')")){s.setString(1,name);s.setString(2,hash);s.executeUpdate();}}
+            else {
+                if(count!=1||expectedLegacyHash==null)throw new IllegalStateException("Owner already exists; setup cannot overwrite users");
+                try(PreparedStatement s=c.prepareStatement("SELECT 1 FROM users u JOIN documents d ON d.namespace='auth-default-account' AND d.id=u.name WHERE u.name='admin' AND u.role='Owner' AND u.hash=?")){s.setString(1,expectedLegacyHash);try(ResultSet r=s.executeQuery()){if(!r.next())throw new IllegalStateException("Legacy account changed; setup cannot overwrite users");}}
+                if(!name.equals("admin")){
+                    String history=null;try(PreparedStatement s=c.prepareStatement("SELECT json FROM documents WHERE namespace='build-history' AND id='admin'");ResultSet r=s.executeQuery()){if(r.next())history=r.getString(1);}
+                    try(PreparedStatement s=c.prepareStatement("SELECT json FROM documents WHERE namespace='build-history' AND id=?")){s.setString(1,name);try(ResultSet r=s.executeQuery()){if(r.next())throw new IllegalStateException("Destination identity retains another build history");}}
+                    if(history!=null){Map<String,Object> moved=new LinkedHashMap<>(Json.object(history));moved.put("actor",name);try(PreparedStatement s=c.prepareStatement("UPDATE documents SET id=?,json=? WHERE namespace='build-history' AND id='admin'")){s.setString(1,name);s.setString(2,Json.write(moved));s.executeUpdate();}}
+                }
+                try(PreparedStatement s=c.prepareStatement("UPDATE users SET name=?,hash=? WHERE name='admin' AND hash=?")){s.setString(1,name);s.setString(2,hash);s.setString(3,expectedLegacyHash);if(s.executeUpdate()!=1)throw new IllegalStateException("Legacy account changed concurrently");}
+                try(PreparedStatement s=c.prepareStatement("DELETE FROM documents WHERE namespace='auth-default-account' AND id='admin'")){s.executeUpdate();}
+            }
+            try(PreparedStatement s=c.prepareStatement("INSERT INTO documents VALUES(?,?,?) ON CONFLICT(namespace,id) DO UPDATE SET json=excluded.json")){
+                for(var row:List.of(Map.of("namespace","license","id","state","value",license),Map.of("namespace","onboarding","id","state","value",preferences),Map.of("namespace","auth-identity","id",name,"value",Map.of("name",name,"uuid",uuid.toString())))){
+                    s.setString(1,(String)row.get("namespace"));s.setString(2,(String)row.get("id"));s.setString(3,Json.write(row.get("value")));s.executeUpdate();
+                }
+            }
+            if(!authority.call())throw new SecurityException("Setup player authority changed before commit");c.commit();return null;
+        }catch(Exception error){c.rollback();throw error;}finally{c.setAutoCommit(true);}});
+    }
     public CompletableFuture<List<Map<String,Object>>> users() {return submit(c->{List<Map<String,Object>> out=new ArrayList<>();try(Statement s=c.createStatement();ResultSet r=s.executeQuery("SELECT name,role FROM users ORDER BY name")){while(r.next())out.add(Map.of("name",r.getString(1),"role",r.getString(2)));}return out;});}
     public CompletableFuture<Boolean> deleteUser(String name) {
         return submit(c->{c.setAutoCommit(false);try{

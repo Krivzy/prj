@@ -13,10 +13,11 @@ export default function KernelProfiles(){
   const mounted=useRef(true),activeOwner=useRef(owner);activeOwner.current=owner;
   useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
   useEffect(()=>{if(!owner)setPlan(null);},[owner]);
-  const labels:Record<KernelProfileId,[string,string]>={custom:['Свои настройки','Custom files'],vanilla:['Полная ванила','Vanilla behavior'],'vanilla-performance':['Ванила + производительность','Vanilla + performance'],optimized:['Оптимизированный','Optimized'],'maximum-optimized':['Максимально оптимизированный','Maximum optimization']};
+  const labels:Record<KernelProfileId,[string,string]>={custom:['Свои настройки','Custom files'],vanilla:['Полная ванила','Vanilla behavior'],'vanilla-throughput':['Ванильная производительность','Vanilla throughput'],'vanilla-performance':['Ванила + производительность','Vanilla + performance'],optimized:['Оптимизированный','Optimized'],'maximum-optimized':['Максимально оптимизированный','Maximum optimization']};
   const description:Record<KernelProfileId,[string,string]>={
     custom:['Управляй файлами сам. MCC сохранит текущие настройки и не будет переписывать конфигурацию ядра.','Manage the files yourself. MCC preserves current kernel settings and never rewrites them.'],
     vanilla:['Ванильные настройки поведения в рамках этого ядра. Плагины и отличия самого ядра сохраняются.','Vanilla-like behavior within this kernel. Plugins and inherent kernel differences remain.'],
+    'vanilla-throughput':['Сохраняет текущие дистанции, активность сущностей, спавн и правила мира. Использует ванильный redstone и распределяет автосохранение.','Preserves distances, entity activity, spawning and world rules. Uses vanilla redstone and paced autosaving.'],
     'vanilla-performance':['Настройки, близкие к ванильным: меньше дистанция симуляции, оптимизация взрывов и распределённое сохранение.','Vanilla-like settings with a shorter simulation distance, cached explosion calculations and paced saving.'],
     'maximum-optimized':['Сохраняет текущие дистанции обзора и симуляции. Агрессивно сокращает работу сущностей и меняет redstone. Фермы и механики требуют проверки.','Preserves current view and simulation distances. Aggressively reduces entity work and changes redstone. Test farms and mechanics before use.'],
     optimized:['Меньше активных сущностей и дальности симуляции, другой redstone. Поведение ферм может измениться.','Fewer active entities, a shorter simulation distance and different redstone. Farms can behave differently.'],

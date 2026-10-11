@@ -1,0 +1,64 @@
+{
+  "testedAt": "2026-10-11T18:02:13.409490+00:00",
+  "engineVersion": "0.2.0",
+  "upstreamCommit": "46d4834e8e2ec4af9dcfa028076fb16dfb8a3911",
+  "foundationSha256": "86c96263ba9a6257cc8b03e8e8fd8f90ee03fedb396918ed1fa1f74ebe196223",
+  "patchsetSha256": "3d42ace4d8f3a14bb7765cb173da0bcd06aa7a6533bd33e4e8892a50d0ca3c6f",
+  "originalOreFeatureSourceSha256": "38f51ced82ccda2f763c381cf01d3196bb2ffe1f29d5d9da8b9ae62dbe0218d1",
+  "totalTests": 17,
+  "suites": [
+    {
+      "name": "dev.mcc.core.engine.LongArrayWriterTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "reportSha256": "21f34719859421f074ddd8dc2d6ab7afadabaddea14082020b96f51e6a9e4232"
+    },
+    {
+      "name": "dev.mcc.core.engine.OreBitSetPoolTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "reportSha256": "5fff9ea51c0f4486e87c06f7a58dfbdea07d92b715cd250683510b4d2637e187"
+    },
+    {
+      "name": "dev.mcc.core.engine.PaletteStorageTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "reportSha256": "3b2016cadcc7b1ff91ffdfa9ad47e9fb3b0d08fa13bcce424d12c43caea5c95e"
+    },
+    {
+      "name": "net.minecraft.nbt.MccCompoundTagWriteTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "reportSha256": "9bb4609aa23c0ccb7274e00ed623dbfb4500606ea419facc5d9332f13a1695a8"
+    },
+    {
+      "name": "dev.mcc.core.engine.OreFeatureEquivalenceTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "reportSha256": "e2792cb33289405c95274ed9f236bb7fb4ffa6179e3dbb595563cc24d568ed60"
+    }
+  ],
+  "oracleScope": {
+    "fullUnchangedAlgorithm": true,
+    "renamedClassOnly": true,
+    "gridBlockstatesAndWriteOrderCompared": true,
+    "nextRandomLongsCompared": 8,
+    "mainCases": 45,
+    "nestedActualPlacement": true,
+    "exceptionCleanupThenActualPlacement": true
+  },
+  "nativeLifecycleVerified": false,
+  "wholeWorldGenerationDeterminismVerified": false,
+  "performanceSuperiorityVerified": false,
+  "mainTouched": false
+}

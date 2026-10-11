@@ -124,14 +124,13 @@ public final class GameService implements Listener, AutoCloseable {
         int chunks = snapshotMetrics?worlds.stream().mapToInt(w -> ((Number) w.get("loadedChunks")).intValue()).sum():0;
         double[] tps = snapshotMetrics?ServerPlatform.tps():new double[0];
         Map<String,Object> result=map("timestamp", System.currentTimeMillis(), "serverName", ServerPlatform.brand(), "version", Bukkit.getVersion(),
-                "minecraftVersion", ServerPlatform.minecraftVersion(), "online", snapshotPlayers?Bukkit.getOnlinePlayers().size():0, "maxPlayers", Bukkit.getMaxPlayers(),
+                "minecraftVersion", ServerPlatform.minecraftVersion(), "online", Bukkit.getOnlinePlayers().size(), "maxPlayers", Bukkit.getMaxPlayers(),
                 "tps", Arrays.stream(tps).boxed().toList(), "mspt", snapshotMetrics?ServerPlatform.mspt():null, "platformMetrics", snapshotMetrics?ServerPlatform.metrics():null,
                 "uptimeSeconds", ManagementFactory.getRuntimeMXBean().getUptime() / 1000, "heapUsed", runtime.totalMemory() - runtime.freeMemory(),
                 "heapMax", runtime.maxMemory(), "cpu", null, "loadedChunks", chunks, "entityCount", entities,
                 "worldCount", worlds.size(), "worlds", worlds, "activeEvents", activeEvents(), "pendingSpawnBatches", spawnJobs.size(), "performanceGuard", snapshotMetrics?ServerPlatform.performanceGuard():null,
                 "motd", plain(Bukkit.getMotd()), "whitelist", Bukkit.hasWhitelist(), "viewDistance", Bukkit.getViewDistance(), "simulationDistance", Bukkit.getSimulationDistance());
         if(!snapshotEntities)result.remove("entityCount");
-        if(!snapshotPlayers)result.remove("online");
         if(!snapshotMetrics)for(String key:List.of("tps","mspt","platformMetrics","heapUsed","heapMax","cpu","performanceGuard","loadedChunks"))result.remove(key);
         return result;
     }

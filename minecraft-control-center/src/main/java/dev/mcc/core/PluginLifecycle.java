@@ -10,7 +10,7 @@ import java.util.function.*;
 
 /** Inert removal requests. Only the offline prelaunch hook moves a JAR out of plugins/. */
 public final class PluginLifecycle {
-    private static final long JAR_LIMIT=64L*1024*1024,TTL=300_000;
+    private static final long TTL=300_000;
     private static final int MAX_JARS=512,MAX_OPERATIONS=512;
     private final Path plugins,data,quarantine;
     private final Supplier<List<Map<String,Object>>> runtime;
@@ -78,7 +78,7 @@ public final class PluginLifecycle {
         }
         return Map.of("removed",removed,"pending",0,"liveUnloading",false,"dataDirectoriesPreserved",true);
     }
-    private List<Jar> inventory()throws Exception {checkFolders();List<Jar> jars=new ArrayList<>();try(DirectoryStream<Path> files=Files.newDirectoryStream(plugins)){for(Path path:files){if(!path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar"))continue;if(jars.size()>=MAX_JARS)throw new IOException("Plugin inventory exceeds its bound");ordinary(path,false);if(Files.size(path)>JAR_LIMIT)throw new IOException("Plugin JAR exceeds64 MiB");jars.add(new Jar(path,PluginJar.inspectExisting(path)));}}return jars;}
+    private List<Jar> inventory()throws Exception {checkFolders();List<Jar> jars=new ArrayList<>();try(DirectoryStream<Path> files=Files.newDirectoryStream(plugins)){for(Path path:files){if(!path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar"))continue;if(jars.size()>=MAX_JARS)throw new IOException("Plugin inventory exceeds its bound");ordinary(path,false);jars.add(new Jar(path,PluginJar.inspectExisting(path)));}}return jars;}
     private List<Map<String,Object>> operations()throws IOException {checkFolders();List<Map<String,Object>> out=new ArrayList<>();try(DirectoryStream<Path> files=Files.newDirectoryStream(quarantine)){for(Path path:files){if(out.size()>=MAX_OPERATIONS)throw new IOException("Plugin quarantine exceeds its bound");ordinary(path,true);UUID.fromString(path.getFileName().toString());out.add(operation(path.getFileName().toString()));}}return out;}
     private Map<String,Object> operation(String id)throws IOException {Path path=folder(id).resolve("operation.json");ordinary(path,false);if(Files.size(path)>32768)throw new IOException("Quarantine metadata exceeds its bound");Map<String,Object> value=Json.object(Files.readString(path,StandardCharsets.UTF_8));if(!Objects.equals(value.get("schema"),1)||!id.equals(value.get("id"))||!Objects.toString(value.get("sha256"),"").matches("[0-9a-f]{64}")||!Set.of("pending-removal","removed","cancelled","restored-pending-restart").contains(value.get("status")))throw new IOException("Invalid quarantine metadata");file(value.get("file"));name(Objects.toString(value.get("name"),""));return value;}
     private Path folder(String id)throws IOException {UUID.fromString(id);Path result=quarantine.resolve(id);ordinary(result,true);return result;}
@@ -99,6 +99,6 @@ public final class PluginLifecycle {
     private static void name(String value){if(!value.matches("[A-Za-z0-9_.-]{1,128}"))throw new IllegalArgumentException("Invalid plugin name");}
     private static void actor(String actor){if(actor==null||actor.isBlank()||actor.length()>128)throw new IllegalArgumentException("Active actor is required");}
     private static void authorized(BooleanSupplier authority){if(Thread.currentThread().isInterrupted()||!authority.getAsBoolean())throw new SecurityException("Owner session is no longer active; plugin operation cancelled");}
-    private static String sha(Path path)throws Exception {ordinary(path,false);MessageDigest digest=MessageDigest.getInstance("SHA-256");long bytes=0;try(InputStream in=Files.newInputStream(path)){byte[] buffer=new byte[32768];int read;while((read=in.read(buffer))!=-1){if((bytes+=read)>JAR_LIMIT)throw new IOException("Plugin JAR exceeds its bound");digest.update(buffer,0,read);}}return HexFormat.of().formatHex(digest.digest());}
+    private static String sha(Path path)throws Exception {ordinary(path,false);long limit=PluginJar.existingLimit(PluginJar.inspectExisting(path));MessageDigest digest=MessageDigest.getInstance("SHA-256");long bytes=0;try(InputStream in=Files.newInputStream(path)){byte[] buffer=new byte[32768];int read;while((read=in.read(buffer))!=-1){if((bytes+=read)>limit)throw new IOException("Plugin JAR exceeds its bound");digest.update(buffer,0,read);}}return HexFormat.of().formatHex(digest.digest());}
     private static String digest(byte[] bytes)throws NoSuchAlgorithmException{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));}
 }

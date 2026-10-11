@@ -51,6 +51,14 @@ class PluginCatalogTest {
         project("Dependency","Dependency");version("Dependency","DepV","Dependency",yaml("Dependency"),List.of());Path existing=plugins.resolve("existing.jar");byte[] original=jar(yaml("Dependency"));Files.write(existing,original);
         project("Project","Example");version("Project","Version","Example",yaml("Example")+"depend: [Dependency]\n",List.of(Map.of("project_id","Dependency","dependency_type","required")));install(plan("Project"));assertEquals(2,jarCount());assertArrayEquals(original,Files.readAllBytes(existing));assertEquals(1,db.documents("catalog-installs").get().size());
     }
+    @Test void largeEmbeddedCoreMccDoesNotBreakCatalogInventoryLookupOrExactReuse()throws Exception {
+        Path mcc=PluginLifecycleTest.largeJar(plugins.resolve("MinecraftControlCenter.jar"),"MinecraftControlCenter","dev.mcc.MccPlugin",64L*1024*1024);
+        project("Project","Example");version("Project","Version","Example",yaml("Example"),List.of());assertEquals("installed-pending-restart",install(plan("Project")).get("status"));assertEquals("already-installed",install(plan("Project")).get("status"));assertEquals(2,jarCount());assertTrue(Files.size(mcc)>64L*1024*1024);
+        assertEquals("installed-pending-restart",catalog.installedCatalog().get().getFirst().get("status"));
+    }
+    @Test void largerExistingMccAllowanceNeverExpandsTheDownloadLimit()throws Exception {
+        project("Project","Example");Map<String,Object> release=version("Project","Version","Example",yaml("Example"),List.of());Map<String,Object> file=new LinkedHashMap<>((Map<String,Object>)((List<?>)release.get("files")).getFirst());file.put("size",64L*1024*1024+1);release.put("files",List.of(file));json("project/Project/version",List.of(release));assertThrows(ExecutionException.class,()->plan("Project"));assertEquals(0,jarCount());
+    }
     @Test void mismatchedRequiredDependencyVersionBlocksTheWholeSet()throws Exception {
         project("Dependency","Dependency");version("Dependency","DepV","Dependency",yaml("Dependency"),List.of());Files.write(plugins.resolve("existing.jar"),jar(yaml("Dependency").replace("'1.0'","'0.9'")));
         project("Project","Example");version("Project","Version","Example",yaml("Example"),List.of(Map.of("project_id","Dependency","dependency_type","required")));assertThrows(ExecutionException.class,()->install(plan("Project")));assertEquals(1,jarCount());assertTrue(db.documents("catalog-installs").get().isEmpty());

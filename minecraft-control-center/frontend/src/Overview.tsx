@@ -4,6 +4,7 @@ import {useLive} from './live';
 import {ActionButton, Avatar, Button, Empty, Icon, Loading, Panel} from './ui';
 import {RestartControl} from './ServerRestart';
 import {moduleEnabled} from './module-view';
+import {licenseAllowsPage} from './license-view';
 import type {Metric} from './types';
 const OverworldScene = lazy(() => import('./OverworldScene'));
 const metrics = [
@@ -38,12 +39,14 @@ export default function Overview() {
   const [range,setRange] = useState('5m');
   const [metric,setMetric] = useState('tps');
   const metricsEnabled = moduleEnabled(app.modules,'metrics');
+  const historyEnabled = metricsEnabled && app.auth.license?.fullAccess !== false;
   const playersEnabled = moduleEnabled(app.modules,'playerSnapshots');
   const timelineEnabled = moduleEnabled(app.modules,'timeline');
-  const history = useResource<Metric[]>(metricsEnabled ? `/api/metrics?range=${range}` : null);
-  useEffect(() => {if (!metricsEnabled) return; const timer = setInterval(() => {if (!document.hidden) history.reload();},15000); return () => clearInterval(timer);}, [range,metricsEnabled]);
+  const history = useResource<Metric[]>(historyEnabled ? `/api/metrics?range=${range}` : null);
+  useEffect(() => {if (!historyEnabled) return; const timer = setInterval(() => {if (!document.hidden) history.reload();},15000); return () => clearInterval(timer);}, [range,historyEnabled]);
   if (!s) return <Loading/>;
-  const world = s.worlds?.find(item => item.name === selected) ?? s.worlds?.[0];
+  const worlds = s.worlds ?? [];
+  const world = worlds.find(item => item.name === selected) ?? worlds[0];
   const online = players.filter(player => player.online);
   const chartMetric = metrics.find(item => item.key === metric)!;
   const quick = [
@@ -59,8 +62,8 @@ export default function Overview() {
         <span className="hero-version"><i/>Minecraft {s.minecraftVersion}</span>
         <h2>{app.t('Бесконечный мир.\nПолный контроль.','Infinite world.\nComplete control.')}</h2>
         <p>{app.t('От первого блока до большого сервера.\nВсё, что нужно для следующей главы.','From the first block to a thriving server.\nEverything you need for your next chapter.')}</p>
-        <div className="hero-buttons">{app.owner&&<RestartControl/>}<Button className="primary" disabled={!moduleEnabled(app.modules,'map')} onClick={() => app.navigate('map')}>{app.t('Открыть карту','Open world map')}<Icon name="arrow" size={18}/></Button><Button className="hero-secondary" onClick={() => app.navigate('worlds')}>{app.t('Управлять мирами','Manage worlds')}</Button></div>
-        <span className="hero-live-note"><span className="pixel-cross" aria-hidden="true"/>{s.worldCount ?? s.worlds.length} {app.t('мира подключено','worlds connected')} <b/> {app.t('Синхронизация в реальном времени','Realtime sync')}</span>
+        <div className="hero-buttons">{app.owner&&<RestartControl/>}<Button className="primary" disabled={!moduleEnabled(app.modules,'map')||!licenseAllowsPage(app.auth.license,'map')} title={!licenseAllowsPage(app.auth.license,'map')?app.t('Доступно в полной версии','Available with full access'):undefined} onClick={() => app.navigate('map')}>{app.t('Открыть карту','Open world map')}<Icon name="arrow" size={18}/></Button><Button className="hero-secondary" disabled={!licenseAllowsPage(app.auth.license,'worlds')} title={!licenseAllowsPage(app.auth.license,'worlds')?app.t('Доступно в полной версии','Available with full access'):undefined} onClick={() => app.navigate('worlds')}>{app.t('Управлять мирами','Manage worlds')}</Button></div>
+        <span className="hero-live-note"><span className="pixel-cross" aria-hidden="true"/>{s.worldCount ?? worlds.length} {app.t('мира подключено','worlds connected')} <b/> {app.t('Синхронизация в реальном времени','Realtime sync')}</span>
       </div>
       <div className="hero-landscape" aria-hidden="true"><Suspense fallback={<div className="scene-placeholder"/>}><OverworldScene compact/></Suspense></div>
       <span className="hero-scene-label">Overworld <i/> {app.t('Мир возможностей','A world of possibility')}</span>
@@ -76,14 +79,15 @@ export default function Overview() {
       <Panel className="metrics-panel">
         <div className="panel-heading"><div><span className="section-kicker">{app.t('Наблюдение','Monitoring')}</span><h2>{app.t('Пульс сервера','Server pulse')}</h2></div><div className="segmented" aria-label={app.t('Период','Range')}>{['5m','1h','24h'].map(value => <button key={value} className={range === value ? 'active' : ''} aria-pressed={range === value} onClick={() => setRange(value)}>{value}</button>)}</div></div>
         <div className="chart-tabs">{metrics.map(item => <button key={item.key} className={metric === item.key ? 'active' : ''} aria-pressed={metric === item.key} onClick={() => setMetric(item.key)}><i style={{background:item.color}}/>{item.label}</button>)}</div>
-        {!metricsEnabled ? <Empty title={app.t('Метрики отключены','Metrics disabled')} icon="dashboard">{app.t('Включи модуль метрик в настройках, чтобы возобновить измерения.','Enable metrics in settings to resume sampling.')}</Empty> : history.data?.length ? <><Chart data={history.data} metric={metric} color={chartMetric.color}/><div className="chart-axis"><span>{time(history.data[0]?.time ?? history.data[0]?.timestamp)}</span><span>{time(history.data.at(-1)?.time ?? history.data.at(-1)?.timestamp)}</span></div></> : <Empty title={history.error ? app.t('История недоступна','History unavailable') : app.t('Собираем первые измерения','Collecting the first samples')} icon="dashboard"/>}
+        {!metricsEnabled ? <Empty title={app.t('Метрики отключены','Metrics disabled')} icon="dashboard">{app.t('Включи модуль метрик в настройках, чтобы возобновить измерения.','Enable metrics in settings to resume sampling.')}</Empty> : !historyEnabled ? <Empty title={app.t('Текущие показатели — выше','Live readings are shown above')} icon="dashboard">{app.t('Графики истории доступны в полной версии.','History charts are available with full access.')}</Empty> : history.data?.length ? <><Chart data={history.data} metric={metric} color={chartMetric.color}/><div className="chart-axis"><span>{time(history.data[0]?.time ?? history.data[0]?.timestamp)}</span><span>{time(history.data.at(-1)?.time ?? history.data.at(-1)?.timestamp)}</span></div></> : <Empty title={history.error ? app.t('История недоступна','History unavailable') : app.t('Собираем первые измерения','Collecting the first samples')} icon="dashboard"/>}
         <div className="metrics-bottom"><span><i/>{app.t('Данные с твоего сервера','Data from your server')}</span><span>{app.t('Обновлено','Updated')} {time(updated)}</span></div>
       </Panel>
       <Panel className="world-controls"><div className="panel-heading"><div><span className="section-kicker">{app.t('Простые действия','Quick controls')}</span><h2>{app.t('Пульт мира','World controls')}</h2></div><Icon name="worlds" size={21}/></div>
-        <label className="world-select-label"><span>{app.t('Выбранный мир','Selected world')}</span><select aria-label={app.t('Мир','World')} value={world?.name ?? ''} onChange={event => setSelected(event.target.value)}>{s.worlds.map(item => <option key={item.uuid} value={item.name}>{item.name}</option>)}</select></label>
+        {!licenseAllowsPage(app.auth.license,'worlds')&&<p className="hint">{app.t('Управление миром доступно в полной версии.','World controls are available with full access.')}</p>}
+        <label className="world-select-label"><span>{app.t('Выбранный мир','Selected world')}</span><select aria-label={app.t('Мир','World')} disabled={!world || !licenseAllowsPage(app.auth.license,'worlds')} value={world?.name ?? ''} onChange={event => setSelected(event.target.value)}>{worlds.map(item => <option key={item.uuid} value={item.name}>{item.name}</option>)}</select></label>
         <div className="world-facts"><span><Icon name={world && world.time >= 13000 && world.time < 23000 ? 'moon' : 'sun'} size={16}/>{world ? `${Math.floor(((world.time+6000)%24000)/1000).toString().padStart(2,'0')}:${Math.floor(world.time%1000/1000*60).toString().padStart(2,'0')}` : '—'}</span><span>{world ? app.t(...weatherLabels[world.weather] ?? [world.weather,world.weather]) : '—'}</span><span>{world?.difficulty ?? '—'}</span></div>
         <div className="world-control-grid">{quick.map(item => <ActionButton key={item.id} action={item.action} params={item.params} disabled={!world}><Icon name={item.icon} size={22}/><span>{app.t(item.ru,item.en)}</span></ActionButton>)}</div>
-        <div className="world-control-footer"><ActionButton action="world.save" params={{world:world?.name}} disabled={!world}><Icon name="check" size={16}/>{app.t('Сохранить мир','Save world')}</ActionButton><Button className="text-button" onClick={() => app.navigate('worlds')}>{app.t('Все настройки','All settings')}<Icon name="arrow" size={15}/></Button></div>
+        <div className="world-control-footer"><ActionButton action="world.save" params={{world:world?.name}} disabled={!world}><Icon name="check" size={16}/>{app.t('Сохранить мир','Save world')}</ActionButton><Button className="text-button" disabled={!licenseAllowsPage(app.auth.license,'worlds')} onClick={() => app.navigate('worlds')}>{app.t('Все настройки','All settings')}<Icon name="arrow" size={15}/></Button></div>
       </Panel>
       <Panel className="online-panel"><div className="panel-heading"><div><span className="section-kicker">{app.t('Твоя команда','Your community')}</span><h2>{app.t('Сейчас в игре','Playing now')}</h2></div><span className="count-pill">{playersEnabled ? online.length : '—'}</span></div>
         {!playersEnabled ? <Empty title={app.t('Снимки игроков отключены','Player snapshots disabled')} icon="players"/> : online.length ? <div className="player-mini-list">{online.slice(0,5).map(player => <button key={player.uuid} onClick={() => app.navigate('players')}><Avatar name={player.name} small/><span><strong>{player.name}</strong><small>{player.world}</small></span><em>{player.ping} ms</em><Icon name="chevron" size={15}/></button>)}</div> : <div className="empty-player-scene"><span className="empty-pixel-person" aria-hidden="true">▣</span><strong>{app.t('Приключение начинается с тебя','The adventure starts with you')}</strong><small>{app.t('Игроки появятся здесь, когда войдут на сервер.','Players will appear here when they join.')}</small></div>}

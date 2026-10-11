@@ -1,15 +1,15 @@
 # MCC runs inside Paper. Keep loopback unless you explicitly configure LAN + HTTPS.
 web:
   host: 127.0.0.1
-  port: 8080
+  # Dynmap's standard TCP port. Use your host's assigned web/Dynmap port if different.
+  # MCC and Dynmap cannot listen on the same address and port at the same time.
+  port: 8123
   allow-lan: false
   public-origin: ''
   secure-cookie: false
-auth:
-  # Creates admin with the initial password admin on an empty loopback installation only.
-  # Change the initial password in My account before allowing remote access.
-  # Existing users are preserved. false or LAN mode uses private-token setup instead.
-  bootstrap-admin: true
+# First Owner: an online operator receives a private, one-time chat link.
+# Console fallback: mcc setup <onlinePlayer> (target must be an operator or have mcc.setup).
+# Existing auth.bootstrap-admin values are ignored. Public default credentials are never created.
 performance:
   profile: balanced
 modules:

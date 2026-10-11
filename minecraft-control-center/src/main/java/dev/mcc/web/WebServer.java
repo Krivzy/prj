@@ -4,6 +4,7 @@ import dev.mcc.MccPlugin;
 import dev.mcc.core.*;
 import dev.mcc.game.GameService;
 import dev.mcc.game.SavedImageMap;
+import dev.mcc.server.MccCoreLink;
 import io.undertow.*;
 import io.undertow.server.*;
 import io.undertow.server.handlers.CookieImpl;
@@ -26,12 +27,13 @@ public final class WebServer implements AutoCloseable {
     private record Request(String fingerprint,CompletableFuture<Object> result,long created){}
     private final ConcurrentHashMap<String,Request> requests=new ConcurrentHashMap<>();
     private final ByteCache compressedAssets=new ByteCache(64,4*1024*1024);
+    private volatile boolean running;
     public WebServer(MccPlugin plugin,Auth auth,Database db,MainThread main,GameService game,Realtime realtime,String host,int port,boolean allowLan,String publicOrigin,boolean secureCookie)throws Exception{
         this.plugin=plugin;this.auth=auth;this.db=db;this.main=main;this.game=game;this.realtime=realtime;this.secureCookie=secureCookie;
         http.allowCoreThreadTimeOut(true);
         InetAddress bind=InetAddress.getByName(host);if(!bind.isLoopbackAddress()&&!allowLan)throw new IllegalArgumentException("Non-loopback bind requires web.allow-lan: true");
         localDefaultMode=bind.isLoopbackAddress()&&!allowLan&&publicOrigin.isBlank();
-        if(port<1024||port>65535)throw new IllegalArgumentException("HTTP port must be 1024–65535");
+        DashboardPort.requireValid(port);
         Set<String> allowed=new HashSet<>();if(bind.isLoopbackAddress()){allowed.add("http://localhost:"+port);allowed.add("http://127.0.0.1:"+port);allowed.add("http://[::1]:"+port);}
         if(!publicOrigin.isBlank()){URI uri=URI.create(publicOrigin);if(!Set.of("http","https").contains(uri.getScheme())||uri.getHost()==null||uri.getRawUserInfo()!=null||uri.getRawQuery()!=null||uri.getRawFragment()!=null||!(uri.getPath()==null||uri.getPath().isEmpty()))throw new IllegalArgumentException("web.public-origin must be an origin without path");allowed.add(publicOrigin);}
         if(allowed.isEmpty())throw new IllegalArgumentException("LAN mode requires explicit web.public-origin");origins=Set.copyOf(allowed);Set<String> h=new HashSet<>();allowed.forEach(s->h.add(URI.create(s).getRawAuthority()));hosts=Set.copyOf(h);
@@ -44,14 +46,14 @@ public final class WebServer implements AutoCloseable {
                 if(requestHost==null||!hosts.contains(requestHost.toLowerCase(Locale.ROOT))){respond(e,403,Map.of("error","invalid_host","message","Host is not allowed"));return;}
                 String origin=e.getRequestHeaders().getFirst(Headers.ORIGIN);if(origin!=null&&!origins.contains(origin)){respond(e,403,Map.of("error","invalid_origin","message","Origin is not allowed"));return;}
                 if(e.getRequestPath().equals("/ws")){
-                    Auth.Session s=session(e);if(s==null||origin==null||s.defaultPassword()&&!(localDefaultMode&&e.getSourceAddress().getAddress().isLoopbackAddress())){respond(e,401,Map.of("error","unauthorized","message","Authenticated same-origin WebSocket required"));return;}
+                    Auth.Session s=session(e);if(s==null||origin==null||s.defaultPassword()){respond(e,401,Map.of("error","unauthorized","message","Authenticated same-origin WebSocket required; replace any legacy initial password first"));return;}
                     e.putAttachment(SESSION,s);websocket.handleRequest(e);return;
                 }
                 boolean upload=e.getRequestPath().equals("/api/plugins/stage");e.setMaxEntitySize(upload?16*1024*1024L:65536L);
                 if(!upload&&e.getRequestContentLength()>65536L){respond(e,413,Map.of("error","request_too_large","message","Maximum JSON request size is 64 KiB"));return;}
                 if(e.isInIoThread()){try{e.dispatch(http,()->handle(e));}catch(RejectedExecutionException busy){respond(e,503,Map.of("error","busy","message","HTTP queue full"));}}else handle(e);
             }).build();
-        try{server.start();}catch(Exception e){http.shutdownNow();throw new IOException("Cannot bind MCC dashboard to "+host+":"+port+"; check port availability",e);}
+        try{server.start();running=true;}catch(Exception e){running=false;http.shutdownNow();throw new IOException("Cannot bind MCC dashboard to "+host+":"+port+". Check web.host and set web.port to an unused TCP port allocated by your host. MCC and Dynmap cannot listen on the same address and port; change one port or explicitly disable Dynmap's web server. MCC did not switch ports.",e);}
     }
     private void handle(HttpServerExchange e){
         try{
@@ -60,16 +62,20 @@ public final class WebServer implements AutoCloseable {
             String ip=e.getSourceAddress().getAddress().getHostAddress();boolean mapImage=path.equals("/api/map/images/tile");if(!rate.allow(ip+(mapImage?":map-image":path.startsWith("/api/")?":http":":assets"),mapImage?2400:path.startsWith("/api/")?300:5000,60000))throw new TooMany();
             if(!path.startsWith("/api/")){if(!get)throw new IllegalArgumentException("Invalid path");staticFile(e,path);return;}
             e.getResponseHeaders().put(Headers.CACHE_CONTROL,"no-store");Auth.Session s=session(e);
-            if(get&&path.equals("/api/auth/status")){respond(e,200,auth.status(s));return;}
+            if(get&&path.equals("/api/auth/status")){respond(e,200,plugin.authStatus(s));return;}
             if(get&&path.equals("/api/server/health")){respond(e,200,plugin.restart().health());return;}
-            if(post&&(path.equals("/api/auth/setup")||path.equals("/api/auth/login"))){
+            if(path.startsWith("/api/setup/")){setup(e,path,get,post,s,ip);return;}
+            if(post&&path.equals("/api/auth/setup")){respond(e,410,Map.of("error","setup_changed","message","Первичная настройка доступна по личной ссылке оператора из чата Minecraft: /mcc setup"));return;}
+            if(post&&path.equals("/api/auth/login")){
                 if(!rate.allow(ip+":login",8,60000))throw new TooMany();Map<String,Object> body=body(e);
                 String name=Json.text(body,"username",""),password=Json.text(body,"password","");
-                Auth.Session newSession=path.endsWith("setup")?auth.setup(Json.text(body,"token",""),name,password,e.getSourceAddress().getAddress().isLoopbackAddress()):auth.login(name,password,localDefaultMode&&e.getSourceAddress().getAddress().isLoopbackAddress());
-                cookie(e,newSession.id(),28800);db.audit(name,"auth.login","ok",Map.of("source",ip));respond(e,200,auth.status(newSession));return;
+                Auth.Session newSession=auth.login(name,password,localDefaultMode&&e.getSourceAddress().getAddress().isLoopbackAddress());
+                cookie(e,newSession.id(),28800);db.audit(name,"auth.login","ok",Map.of("source",ip));respond(e,200,plugin.authStatus(newSession));return;
             }
             if(s==null){respond(e,401,Map.of("error","unauthorized","message","Sign in first"));return;}
             if(s.defaultPassword()&&!(localDefaultMode&&e.getSourceAddress().getAddress().isLoopbackAddress()))throw new SecurityException("Change the initial password locally before remote access");
+            if(s.defaultPassword()&&!Set.of("/api/auth/account","/api/auth/logout").contains(path))throw new SecurityException("Replace the legacy initial password before using MCC");
+            plugin.license().requireRoute(path);
             if(retiredMapEndpoint(path)){respond(e,410,Map.of("error","feature_removed","message","Карта доступна через постоянные PNG-тайлы; прежние маршруты и строительство удалены"));return;}
             ModulePolicy.require(ModulePolicy.routeModule(path),plugin::module);
             if(!get&&!Auth.constant(e.getRequestHeaders().getFirst(CSRF),s.csrf()))throw new SecurityException("CSRF token is missing or invalid");
@@ -86,7 +92,7 @@ public final class WebServer implements AutoCloseable {
             if(post&&path.equals("/api/auth/account")){
                 if(!rate.allow(s.name()+":account",5,60000))throw new TooMany();Map<String,Object> values=body(e);
                 Auth.Session changed=changeAccount(s,values);
-                cookie(e,changed.id(),28800);db.audit(changed.name(),"auth.account.changed","ok",Map.of("previousUsername",s.name())).get();respond(e,200,auth.status(changed));return;
+                cookie(e,changed.id(),28800);db.audit(changed.name(),"auth.account.changed","ok",Map.of("previousUsername",s.name())).get();respond(e,200,plugin.authStatus(changed));return;
             }
             Object response;
             if(get){response=get(path,e,s);}else if(post){response=post(path,body(e),s);}else{
@@ -95,6 +101,7 @@ public final class WebServer implements AutoCloseable {
                 else {admin(s);if(path.startsWith("/api/automations/")){plugin.automation().delete(path.substring("/api/automations/".length()));db.audit(s.name(),"automation.delete","ok",Map.of());response=Map.of("ok",true);}else throw new IllegalArgumentException("Unknown endpoint");}
             }
             ModulePolicy.require(ModulePolicy.routeModule(path),plugin::module);
+            plugin.license().requireRoute(path);
             respond(e,response instanceof Map<?,?> map&&Boolean.TRUE.equals(map.get("pending"))?202:200,response);
         }catch(TooMany ex){e.getResponseHeaders().put(Headers.RETRY_AFTER,"60");respond(e,429,Map.of("error","rate_limit","message","Too many requests; retry shortly"));}
         catch(Exception ex){Throwable cause=ex;while((cause instanceof ExecutionException||cause instanceof CompletionException)&&cause.getCause()!=null)cause=cause.getCause();
@@ -103,8 +110,41 @@ public final class WebServer implements AutoCloseable {
             if(code==500)plugin.getLogger().warning("MCC request failed: "+cause.getClass().getSimpleName());respond(e,code,Map.of("error","request_failed","message",message));
         }
     }
+    private void setup(HttpServerExchange e,String path,boolean get,boolean post,Auth.Session session,String ip)throws Exception{
+        SetupService service=plugin.setup();String capability=setupCookie(e);
+        if(get&&path.equals("/api/setup/status")){Map<String,Object> status=setupStatus(service.grant(capability));status.put("authenticated",session!=null);respond(e,200,status);return;}
+        if(!post)throw new IllegalArgumentException("Unknown setup endpoint");
+        String origin=e.getRequestHeaders().getFirst(Headers.ORIGIN);if(origin==null||!origins.contains(origin))throw new SecurityException("Same-origin browser setup required");
+        if(!rate.allow(ip+":setup",8,60000))throw new TooMany();Map<String,Object> values=body(e);
+        if(path.equals("/api/setup/claim")){
+            if(!values.keySet().equals(Set.of("token")))throw new IllegalArgumentException("Only the private link token is accepted");
+            SetupService.Grant grant=service.claim(Json.text(values,"token",""));setupCookie(e,grant.id(),600);respond(e,200,setupStatus(grant));return;
+        }
+        SetupService.Grant grant=service.require(capability,e.getRequestHeaders().getFirst(CSRF));
+        if(path.equals("/api/setup/profile-plan")){
+            if(!values.keySet().equals(Set.of("profile")))throw new IllegalArgumentException("Only a profile selection is accepted");
+            Map<String,Object> plan=plugin.kernelProfiles().plan(service.actor(grant),Json.text(values,"profile",""),()->auth.setupRequired()&&service.grant(grant.id())==grant).get(15,TimeUnit.SECONDS);
+            service.profilePlan(grant,plan);respond(e,200,plan);return;
+        }
+        if(path.equals("/api/setup/complete")){
+            if("mcc-core".equals(Json.text(values,"core","keep"))&&!Boolean.TRUE.equals(plugin.coreStatus().get("available")))throw new IllegalArgumentException("MCC Core недоступно для этого ядра или launcher. Сохраните текущее ядро.");
+            SetupService.Completion completed=service.complete(capability,e.getRequestHeaders().getFirst(CSRF),values);Auth.Session owner=completed.session();cookie(e,owner.id(),28800);setupCookie(e,"",0);
+            Map<String,Object> progress=new LinkedHashMap<>();progress.put("completed",true);progress.put("coreChoice",completed.core());progress.put("coreInstallation",completed.core().equals("mcc-core")?"offline-plan-required":"current-core-kept");
+            try{plugin.licenseAfterSetup();Map<String,Object> applied=plugin.kernelProfiles().apply(service.actor(grant),completed.planId(),true,()->auth.session(owner.id())==owner&&owner.role().equals("Owner")).get(20,TimeUnit.SECONDS);progress.put("profileResult",applied);progress.put("configurationPending",false);}
+            catch(Exception error){progress.put("configurationPending",true);progress.put("configurationMessage","Учётная запись сохранена. Пресет не подтверждён как применённый: проверьте настройки ядра и повторите применение.");}
+            if(completed.core().equals("mcc-core")){
+                try{Map<String,Object> staged=plugin.stageCore(profileActor(owner),()->auth.session(owner.id())==owner&&owner.role().equals("Owner"));progress.put("coreResult",staged);progress.put("coreInstallation",Boolean.TRUE.equals(staged.get("pendingRestart"))?"staged-awaiting-restart":"already-installed");}
+                catch(Exception error){progress.put("coreResult",plugin.coreStatus());progress.put("coreInstallation","not-staged");progress.put("coreMessage","Учётная запись сохранена. Подготовка MCC Core не завершена; текущее ядро продолжает работать.");}
+            }
+            try{db.audit(owner.name(),"auth.initialized","ok",Map.of("playerUuid",grant.player().uuid().toString(),"profile",completed.profile(),"licenseMode",plugin.license().status().get("mode"),"coreChoice",completed.core())).get();progress.put("auditSaved",true);}catch(Exception error){progress.put("auditSaved",false);plugin.getLogger().warning("MCC initialized Owner successfully, but the audit write could not be confirmed");}Map<String,Object> result=new LinkedHashMap<>(plugin.authStatus(owner));result.put("setup",progress);respond(e,200,result);return;
+        }
+        throw new IllegalArgumentException("Unknown setup endpoint");
+    }
+    private Map<String,Object> setupStatus(SetupService.Grant grant)throws Exception{Map<String,Object> status=new LinkedHashMap<>(plugin.setup().status(grant));if(grant!=null){status.put("profiles",plugin.kernelProfiles().status().get(15,TimeUnit.SECONDS));status.put("core",plugin.coreStatus());}return status;}
     private Object get(String path,HttpServerExchange e,Auth.Session s)throws Exception{
         return switch(path){
+            case "/api/license" -> {owner(s);yield plugin.license().status();}
+            case "/api/server/core" -> {owner(s);active(s);yield plugin.coreStatus();}
             case "/api/state" -> plugin.state();
             case "/api/server/runtime" -> {admin(s);yield Map.of("kernel",ServerPlatform.brand(),"minecraftVersion",ServerPlatform.minecraftVersion(),"restart",plugin.restart().status());}
             case "/api/server/profiles" -> {admin(s);active(s);yield plugin.kernelProfiles().status().get(15,TimeUnit.SECONDS);}
@@ -147,6 +187,8 @@ public final class WebServer implements AutoCloseable {
     }
     @SuppressWarnings("unchecked") private Object post(String path,Map<String,Object> body,Auth.Session s)throws Exception{
         return switch(path){
+            case "/api/license" -> {owner(s);active(s);if(!Boolean.TRUE.equals(body.get("confirmed")))throw new IllegalArgumentException("Confirm the license mode change");plugin.updateLicense(Json.text(body,"mode",""),Json.text(body,"licenseKey",""));db.audit(s.name(),"license.mode.changed","ok",Map.of("mode",plugin.license().status().get("mode"))).get();yield plugin.authStatus(s);}
+            case "/api/server/core/stage" -> {owner(s);active(s);if(!Boolean.TRUE.equals(body.get("confirmed")))throw new IllegalArgumentException("Confirm offline MCC Core preparation");if(!rate.allow(s.name()+":core-stage",3,60000))throw new TooMany();Map<String,Object> staged=plugin.stageCore(profileActor(s),()->auth.session(s.id())==s&&s.role().equals("Owner"));db.audit(s.name(),"server.core.staged","ok",Map.of("pendingRestart",staged.getOrDefault("pendingRestart",false))).get();yield staged;}
             case "/api/action" -> action(body,s);
             case "/api/server/restart" -> {owner(s);active(s);if(!Boolean.TRUE.equals(body.get("confirmed")))throw new IllegalArgumentException("Explicit restart confirmation required");String id=Json.text(body,"id","");UUID.fromString(id);db.audit(s.name(),"server.restart.requested","ok",Map.of("id",id,"method","normal-stop-and-start")).get();yield plugin.restart().request(id,()->{active(s);owner(s);});}
             case "/api/server/profiles/plan" -> {owner(s);active(s);yield plugin.kernelProfiles().plan(profileActor(s),Json.text(body,"profile",""),()->auth.session(s.id())==s&&s.role().equals("Owner")).get(15,TimeUnit.SECONDS);}
@@ -174,6 +216,7 @@ public final class WebServer implements AutoCloseable {
     @SuppressWarnings("unchecked") private Object action(Map<String,Object> body,Auth.Session s)throws Exception{
         active(s);
         String id=Json.text(body,"id","");UUID.fromString(id);String action=Json.text(body,"action","");if(action.length()>64)throw new IllegalArgumentException("Invalid action");
+        plugin.license().requireAction(action);
         if(s.role().equals("Viewer")||(s.role().equals("Moderator")&&!MOD_ACTIONS.contains(action)))throw new SecurityException("Role does not allow this action");
         if(Set.of("console.command","player.op","player.deop","player.ipban","player.ban_ip","player.unban_ip","server.settings").contains(action))owner(s);
         Object raw=body.getOrDefault("params",Map.of());if(!(raw instanceof Map<?,?>))throw new IllegalArgumentException("Invalid parameters");Map<String,Object> params=(Map<String,Object>)raw;
@@ -191,7 +234,7 @@ public final class WebServer implements AutoCloseable {
                 moderation(action,params,s).whenComplete((actual,error)->{if(error!=null)fresh.result().completeExceptionally(error);else db.audit(s.name(),action,"ok",redact(params)).whenComplete((unused,auditError)->{if(auditError!=null)fresh.result().completeExceptionally(new IllegalStateException("Punishment applied; audit is unavailable"));else fresh.result().complete(Map.of("ok",true,"result",actual,"sequence",realtime.sequence()));plugin.refreshSoon();});});
                 try{return fresh.result().get(8,TimeUnit.SECONDS);}catch(TimeoutException timeout){return pending(id);}
             }
-            Object actual=main.await(()->{active(s);ModulePolicy.require(ModulePolicy.actionModule(action),plugin::module);return game.execute(action,params);});Map<String,Object> response=Map.of("ok",true,"result",actual,"sequence",realtime.sequence());
+            Object actual=main.await(()->{active(s);plugin.license().requireAction(action);ModulePolicy.require(ModulePolicy.actionModule(action),plugin::module);return game.execute(action,params);});Map<String,Object> response=Map.of("ok",true,"result",actual,"sequence",realtime.sequence());
             db.audit(s.name(),action,"ok",redact(params)).get();realtime.publish("timeline",Map.of("time",now,"actor",s.name(),"action",action,"status","ok"));plugin.refreshSoon();fresh.result().complete(response);return response;
         }catch(MainThread.PendingOperation pending){pending.future().whenComplete((actual,error)->{
             if(error!=null){db.audit(s.name(),action,"error",Map.of("message","Action failed"));fresh.result().completeExceptionally(error);}
@@ -239,6 +282,8 @@ public final class WebServer implements AutoCloseable {
     }
     private Auth.Session session(HttpServerExchange e){var cookie=e.getRequestCookie("MCC_SESSION");return auth.session(cookie==null?null:cookie.getValue());}
     private void cookie(HttpServerExchange e,String id,int maxAge){e.setResponseCookie(new CookieImpl("MCC_SESSION",id).setHttpOnly(true).setSecure(secureCookie).setSameSiteMode("Strict").setPath("/").setMaxAge(maxAge));}
+    private String setupCookie(HttpServerExchange e){var cookie=e.getRequestCookie("MCC_SETUP");return cookie==null?null:cookie.getValue();}
+    private void setupCookie(HttpServerExchange e,String id,int maxAge){e.setResponseCookie(new CookieImpl("MCC_SETUP",id).setHttpOnly(true).setSecure(secureCookie).setSameSiteMode("Strict").setPath("/").setMaxAge(maxAge));}
     static String profileActor(Auth.Session s){try{return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(s.id().getBytes(java.nio.charset.StandardCharsets.UTF_8)));}catch(java.security.NoSuchAlgorithmException impossible){throw new IllegalStateException(impossible);}}
     private static void owner(Auth.Session s){if(!s.role().equals("Owner"))throw new SecurityException("Owner permission required");}
     private static void admin(Auth.Session s){if(!Set.of("Owner","Admin").contains(s.role()))throw new SecurityException("Admin permission required");}
@@ -266,5 +311,6 @@ public final class WebServer implements AutoCloseable {
     }
     private static final class TooMany extends RuntimeException{}
     public Map<String,Object> stats(){return Map.of("httpThreads",http.getPoolSize(),"httpQueue",http.getQueue().size(),"compressedAssetBytes",compressedAssets.bytes(),"compressedAssetBudgetBytes",4*1024*1024,"pooledDirectBufferBudgetBytes",32*16384);}
-    @Override public void close(){if(server!=null)server.stop();http.shutdownNow();compressedAssets.clear();buffers.close();}
+    public boolean isRunning(){return running;}
+    @Override public void close(){running=false;if(server!=null)server.stop();http.shutdownNow();compressedAssets.clear();buffers.close();}
 }

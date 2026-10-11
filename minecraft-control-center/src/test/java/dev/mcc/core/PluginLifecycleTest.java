@@ -19,6 +19,33 @@ class PluginLifecycleTest {
     private Path jar(String file,String name,String extra)throws Exception {Path path=root.resolve("plugins").resolve(file);try(ZipOutputStream zip=new ZipOutputStream(Files.newOutputStream(path))){zip.putNextEntry(new ZipEntry("plugin.yml"));zip.write(("name: "+name+"\nversion: '1.0'\nmain: test.Main\n"+extra).getBytes(StandardCharsets.UTF_8));zip.closeEntry();zip.putNextEntry(new ZipEntry("test/Main.class"));zip.write(new byte[]{1,2,3});zip.closeEntry();}return path;}
     private Map<String,Object> remove(PluginLifecycle lifecycle,String name)throws Exception {Map<String,Object> plan=lifecycle.plan(name,"owner-session-digest");return lifecycle.remove(plan.get("planId").toString(),"owner-session-digest",()->true);}
     @SuppressWarnings("unchecked") private List<Map<String,Object>> rows(Map<String,Object> value,String key){return (List<Map<String,Object>>)value.get(key);}
+    static Path largeJar(Path path,String name,String main,long... sizes)throws Exception {
+        byte[] buffer=new byte[32768];
+        try(ZipOutputStream zip=new ZipOutputStream(Files.newOutputStream(path))){
+            zip.putNextEntry(new ZipEntry("plugin.yml"));zip.write(("name: "+name+"\nversion: '1.0'\nmain: "+main+"\n").getBytes(StandardCharsets.UTF_8));zip.closeEntry();
+            zip.putNextEntry(new ZipEntry(main.replace('.','/')+".class"));zip.write(new byte[]{1,2,3});zip.closeEntry();
+            for(int index=0;index<sizes.length;index++){long size=sizes[index];CRC32 crc=new CRC32();for(long remaining=size;remaining>0;){int count=(int)Math.min(buffer.length,remaining);crc.update(buffer,0,count);remaining-=count;}
+                ZipEntry padding=new ZipEntry("padding-"+index+".bin");padding.setMethod(ZipEntry.STORED);padding.setSize(size);padding.setCrc(crc.getValue());zip.putNextEntry(padding);
+                for(long remaining=size;remaining>0;){int count=(int)Math.min(buffer.length,remaining);zip.write(buffer,0,count);remaining-=count;}zip.closeEntry();
+            }
+        }return path;
+    }
+
+    @Test void largeEmbeddedCoreMccIsListedProtectedAndDoesNotBlockOtherPluginLifecycle()throws Exception {
+        PluginLifecycle lifecycle=lifecycle(true);Path mcc=largeJar(root.resolve("plugins/MinecraftControlCenter.jar"),"MinecraftControlCenter","dev.mcc.MccPlugin",64L*1024*1024);assertTrue(Files.size(mcc)>64L*1024*1024);
+        runtime.add(Map.of("name","MinecraftControlCenter","version","1.0","enabled",true));Map<String,Object> self=rows(lifecycle.list(),"plugins").getFirst();assertEquals("MinecraftControlCenter",self.get("name"));assertEquals(true,self.get("protected"));assertEquals(false,self.get("canRemove"));assertThrows(SecurityException.class,()->lifecycle.plan("MinecraftControlCenter","owner"));
+        Path example=jar("example.jar","Example","");Map<String,Object> removal=remove(lifecycle,"Example");assertEquals(1,PluginMaintenanceBootstrap.runOffline(root,data).get("removed"));assertFalse(Files.exists(example));assertEquals("restored-pending-restart",lifecycle.restore(removal.get("removalId").toString(),"owner",()->true).get("status"));assertTrue(Files.exists(example));assertTrue(Files.exists(mcc));
+    }
+    @Test void largerInstalledJarAllowanceRequiresBothExactMccNameAndMain()throws Exception {
+        PluginLifecycle lifecycle=lifecycle(true);Path target=root.resolve("plugins/MinecraftControlCenter.jar");
+        for(String[] identity:List.of(new String[]{"MinecraftControlCenter","test.Main"},new String[]{"Other","dev.mcc.MccPlugin"},new String[]{"MCC","dev.mcc.MccPlugin"})){
+            largeJar(target,identity[0],identity[1],64L*1024*1024);assertThrows(IOException.class,()->PluginJar.inspectExisting(target));assertThrows(IOException.class,lifecycle::list);
+        }
+    }
+    @Test void largerMccAllowanceStillRejectsOversizedArchivesAndOversizedExpandedEntries()throws Exception {
+        PluginLifecycle lifecycle=lifecycle(true);Path target=root.resolve("plugins/MinecraftControlCenter.jar");largeJar(target,"MinecraftControlCenter","dev.mcc.MccPlugin",64L*1024*1024,64L*1024*1024);assertTrue(Files.size(target)>128L*1024*1024);assertThrows(IOException.class,lifecycle::list);
+        largeJar(target,"MinecraftControlCenter","dev.mcc.MccPlugin",64L*1024*1024+1);assertThrows(IOException.class,lifecycle::list);
+    }
 
     @Test void liveRemovalIsInertOfflineMovesExactBytesAndRestoreKeepsIndependentBackup()throws Exception {
         PluginLifecycle lifecycle=lifecycle(true);Path original=jar("AdvancedBanZ.jar","AdvancedBanZ","");byte[] bytes=Files.readAllBytes(original);Path config=Files.createDirectories(root.resolve("plugins/AdvancedBanZ")).resolve("config.yml");Files.writeString(config,"manual: keep\n");runtime.add(Map.of("name","AdvancedBanZ","version","1.0","enabled",true));

@@ -58,6 +58,30 @@ class KernelProfilesTest {
             done(manager.reconcileStartup());assertEquals(0,runtime.liveCalls);assertArrayEquals(properties,Files.readAllBytes(root.resolve("server.properties")));assertEquals("maximum-optimized",result.get("profile"));
         }
     }
+    @Test void vanillaThroughputPreservesSimulationFarmAndGameruleFilesAndKeepsVanillaRedstone()throws Exception {
+        try(KernelProfiles manager=service()){
+            byte[] properties=Files.readAllBytes(root.resolve("server.properties")),spigot=Files.readAllBytes(root.resolve("spigot.yml"));
+            Map<String,Object> plan=plan(manager,"vanilla-throughput");assertEquals(true,plan.get("preservesDistances"));assertEquals(false,plan.get("liveDistances"));
+            for(Object item:(List<?>)plan.get("files")){assertTrue(String.valueOf(((Map<?,?>)item).get("path")).endsWith(".yml"));for(Object c:(List<?>)((Map<?,?>)item).get("changes")){String key=String.valueOf(((Map<?,?>)c).get("key"));assertTrue(Set.of("misc.redstone-implementation","misc.update-pathfinding-on-block-update","chunks.max-auto-save-chunks-per-tick").contains(key),key);}}
+            Map<String,Object> result=done(manager.apply("owner-id",(String)plan.get("planId"),true,()->true));
+            assertArrayEquals(properties,Files.readAllBytes(root.resolve("server.properties")));assertArrayEquals(spigot,Files.readAllBytes(root.resolve("spigot.yml")));assertEquals(0,runtime.liveCalls);
+            for(String file:List.of("config/paper-world-defaults.yml","world/dimensions/minecraft/overworld/paper-world.yml")){
+                Map<?,?> paper=KernelConfigFiles.readYaml(KernelConfigFiles.Kind.PAPER,Files.readAllBytes(root.resolve(file)));
+                assertEquals("VANILLA",((Map<?,?>)paper.get("misc")).get("redstone-implementation"));assertEquals(24,((Map<?,?>)paper.get("chunks")).get("max-auto-save-chunks-per-tick"));
+            }
+            assertEquals("vanilla-throughput",result.get("profile"));done(manager.reconcileStartup());assertArrayEquals(properties,Files.readAllBytes(root.resolve("server.properties")));assertArrayEquals(spigot,Files.readAllBytes(root.resolve("spigot.yml")));
+        }
+    }
+    @Test void purpurToCoreManagedIdentityMigrationBacksUpExactMetadataAndKeepsTheChosenProfile()throws Exception {
+        try(KernelProfiles manager=service()){apply(manager,"vanilla-throughput");}
+        Path profile=data.resolve("kernel-profiles/profile.json"),backup=data.resolve("mcc-core/backups/test");Files.createDirectories(backup);
+        String paper=Files.readString(profile),purpur=paper.replace("\"kernel\":\"Paper\"","\"kernel\":\"Purpur\"");assertNotEquals(paper,purpur);Files.writeString(profile,purpur);
+        byte[] before=Files.readAllBytes(profile);Map<String,String> kernelBefore=kernelHashes();
+        KernelProfiles.adoptCoreIdentityOffline(root,data,backup);
+        assertArrayEquals(before,Files.readAllBytes(backup.resolve("previous-kernel-profile.json")));Map<String,Object> migrated=KernelProfiles.readState(profile);
+        assertEquals("Paper",migrated.get("kernel"));assertEquals("Purpur",migrated.get("migratedFromKernel"));assertEquals("vanilla-throughput",migrated.get("profile"));assertEquals(kernelBefore,kernelHashes());
+        byte[] after=Files.readAllBytes(profile);KernelProfiles.adoptCoreIdentityOffline(root,data,backup);assertArrayEquals(after,Files.readAllBytes(profile));
+    }
     @Test void maximumOfflineStartupRestoresMechanicsDriftButRetainsNewManualDistances()throws Exception {
         try(KernelProfiles manager=service()){apply(manager,"maximum-optimized");}awaitLease();
         write("server.properties",read("server.properties").replace("view-distance=12","view-distance=24").replace("simulation-distance=7","simulation-distance=10"));

@@ -1,5 +1,7 @@
 import {pageEnabled} from './module-view.ts';
 import type {Page} from './context';
+import type {LicenseState} from './types';
+import {licenseAllowsPage} from './license-view.ts';
 
 export const pages: {id: Page; ru: string; en: string; group: number}[] = [
   {id:'dashboard', ru:'Обзор', en:'Overview', group:0},
@@ -21,12 +23,14 @@ export const pages: {id: Page; ru: string; en: string; group: number}[] = [
   {id:'settings', ru:'Настройки', en:'Settings', group:2},
 ];
 
-export function availablePages(role: string, integrations: string[] = [], modules:Record<string,boolean> = {}) {
+export function availablePages(role: string, integrations: string[] = [], modules:Record<string,boolean> = {}, license?:LicenseState) {
   const lower = role.toLowerCase();
-  return pages.filter(item => pageEnabled(modules,item.id) &&
+  return pages.filter(item => pageEnabled(modules,item.id) && licenseAllowsPage(license,item.id) &&
     !(['luckperms','coreprotect','advancedban'].includes(item.id) && !integrations.includes(item.id)) &&
     !(['luckperms','coreprotect','advancedban','ores'].includes(item.id) && !['owner','admin'].includes(lower)) &&
     !(['console','plugins','automations'].includes(item.id) && !['owner','admin'].includes(lower)) &&
     !(['chat','audit'].includes(item.id) && lower === 'viewer') &&
     !(item.id === 'backups' && lower !== 'owner'));
 }
+
+export function navigationPages(role:string,integrations:string[]=[],modules:Record<string,boolean>={},license?:LicenseState){return availablePages(role,integrations,{}).filter(item=>pageEnabled(modules,item.id)||!licenseAllowsPage(license,item.id));}
