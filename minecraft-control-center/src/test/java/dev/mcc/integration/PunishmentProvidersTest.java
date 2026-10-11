@@ -73,7 +73,7 @@ class PunishmentProvidersTest {
         Runtime runtime=new Runtime();runtime.items.add(abz());
         try(IntegrationService service=new IntegrationService(runtime,(s,w)->true)){
             assertEquals("advancedban",service.punishmentProvider().get());Map<String,Object> saved=service.mutate(OWNER,"advancedban",issue()).get();Map<?,?> row=(Map<?,?>)saved.get("punishment");assertEquals("TEMP_MUTE",row.get("type"));assertEquals(1_060_000L,row.get("end"));assertEquals("MCC:owner",row.get("operator"));assertEquals(1,((List<?>)service.query(OWNER,"advancedban",player()).get().get("items")).size());
-            Map<String,Object> revoke=new HashMap<>(player());revoke.putAll(Map.of("confirmed",true,"action","revoke","punishmentId",row.get("id")));assertEquals(true,service.mutate(OWNER,"advancedban",revoke).get().get("ok"));assertEquals(1,net.hnt8.advancedban.manager.PunishmentManager.get().creates);assertEquals(1,net.hnt8.advancedban.manager.PunishmentManager.get().deletes);
+            Map<String,Object> revoke=new HashMap<>(player());revoke.putAll(Map.of("confirmed",true,"action","revoke","punishmentId",row.get("id"),"expectedRevision",row.get("revision")));assertEquals(true,service.mutate(OWNER,"advancedban",revoke).get().get("ok"));assertEquals(1,net.hnt8.advancedban.manager.PunishmentManager.get().creates);assertEquals(1,net.hnt8.advancedban.manager.PunishmentManager.get().deletes);
         }
     }
 }

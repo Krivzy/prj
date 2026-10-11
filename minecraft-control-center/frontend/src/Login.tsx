@@ -64,7 +64,7 @@ export default function Login({status, onAuth, lang, changeLang}: {
         </form>
         <span className="auth-note"><Icon name="check" size={15}/>{t('Только ты и твой сервер.','Just you and your server.')}</span>
       </div>
-      <footer className="auth-credits">Создано пользователем Krivzy</footer>
+      <footer className="auth-credits">Разработано Krivzy</footer>
     </section>
   </main>;
 }

@@ -21,6 +21,9 @@ def model_geometry(model, resolve_texture):
             for key in ('uv', 'rotation'):
                 if key in face:
                     value[key] = face[key]
+            tint = face.get('tintindex')
+            if isinstance(tint, int) and not isinstance(tint, bool) and 0 <= tint <= 15:
+                value['tintindex'] = tint
             faces[side] = value
         if not faces:
             continue

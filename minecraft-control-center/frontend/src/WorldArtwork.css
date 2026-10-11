@@ -1,0 +1,14 @@
+.world-artwork{display:block;flex:none;pointer-events:none;overflow:visible;color:#80b878}
+.world-artwork--nether{color:#e68750}.world-artwork--end{color:#ba96e3}
+.main-content .world-tile:has(>.world-artwork){grid-template-columns:minmax(0,1fr);gap:6px;padding:16px 18px 18px;overflow:hidden}
+.main-content .world-tile>.world-artwork{grid-column:1;grid-row:1;width:min(100%,220px);height:auto;aspect-ratio:220/182;justify-self:center;margin:0;filter:none}
+.main-content .world-tile:has(>.world-artwork)>h2{grid-column:1;grid-row:2;font-size:17px;margin:0;line-height:1.5}
+.main-content .world-tile:has(>.world-artwork)>span{grid-column:1;grid-row:3;font-size:11px;margin:0;color:var(--muted)}
+.main-content .world-tile:has(>.world-artwork)>div{grid-column:1;grid-row:4;margin-top:8px}
+@media(prefers-reduced-motion:no-preference){.world-artwork__crystal{animation:world-crystal-drift 5s ease-in-out infinite;transform-box:fill-box;transform-origin:center}.world-artwork__motes{animation:world-motes-glow 4.8s ease-in-out infinite}.world-artwork__embers{animation:world-embers-rise 3.4s ease-in-out infinite}.world-artwork[data-paused=true] *{animation-play-state:paused!important}}
+@keyframes world-crystal-drift{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+@keyframes world-motes-glow{0%,100%{opacity:.35}50%{opacity:.85}}
+@keyframes world-embers-rise{0%,100%{transform:translateY(2px);opacity:.4}50%{transform:translateY(-4px);opacity:.9}}
+@media(prefers-reduced-motion:reduce){.world-artwork *{animation:none!important}}
+@media(max-width:800px){.main-content .world-tile:has(>.world-artwork){min-width:200px;flex:1}.main-content .world-tile>.world-artwork{max-width:170px}}
+@media(forced-colors:active){.world-artwork{forced-color-adjust:none}.main-content .world-tile.selected{outline:2px solid Highlight;outline-offset:-2px}}

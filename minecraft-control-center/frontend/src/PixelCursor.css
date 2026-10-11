@@ -1,0 +1,5 @@
+/* Standard system cursors remain the accessible fallback. Legacy PNGs are unused. */
+html,body{cursor:auto}
+body :is(button,a[href],[role=button],[role=option],[role=tab],summary,select,label:has(input[type=checkbox]),label:has(input[type=radio]),input[type=checkbox],input[type=radio]){cursor:pointer}
+body :is(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=button]):not([type=submit]):not([type=reset]):not([type=file]),textarea,[contenteditable=true]){cursor:text}
+body :is(button,input,select,textarea,[aria-disabled=true]):is(:disabled,[aria-disabled=true]){cursor:not-allowed!important}

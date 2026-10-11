@@ -6,3 +6,5 @@
 .kp-module-list input { flex: 0 0 auto; margin-top: 4px; }
 .kp-tradeoffs { border: 1px solid var(--border, #35483d); padding: 16px; line-height: 1.6; }
 .kp-swatch.maximum-optimized { background: #e5a86b; }
+
+.settings-module-note{line-height:1.65;margin:18px 0 24px!important}.settings-module-note+.button{margin-top:0}

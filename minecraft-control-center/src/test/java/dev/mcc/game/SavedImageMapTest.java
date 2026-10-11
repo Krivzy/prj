@@ -17,6 +17,11 @@ class SavedImageMapTest {
     private static long number(SavedImageMap map,String key){return ((Number)map.manifest("world").get(key)).longValue();}
     private static void await(BooleanSupplier condition)throws Exception{long deadline=System.currentTimeMillis()+5000;while(System.currentTimeMillis()<deadline&&!condition.getAsBoolean())Thread.sleep(25);assertTrue(condition.getAsBoolean(),"Autonomous scan must complete within its bounded test fixture");}
     private static void awaitRecovery(BooleanSupplier condition)throws Exception{long deadline=System.currentTimeMillis()+20000;while(System.currentTimeMillis()<deadline&&!condition.getAsBoolean())Thread.sleep(25);assertTrue(condition.getAsBoolean(),"Durable image recovery must complete in the isolated saved fixture");}
+    private static void awaitRecovery(BooleanSupplier condition,String phase,SavedImageMap map)throws Exception{
+        // One permitted duty-control delay is already 5s; complete scan/pyramid drainage needs additional quanta.
+        long deadline=System.currentTimeMillis()+20000;while(System.currentTimeMillis()<deadline&&!condition.getAsBoolean())Thread.sleep(25);
+        assertTrue(condition.getAsBoolean(),()->{Map<String,Object> state=map.manifest("world");return phase+": status="+state.get("status")+", pendingTiles="+state.get("pendingTiles")+", scannedAt="+state.get("scannedAt")+", failures="+state.get("failures");});
+    }
     @Test void viewerCannotEnqueueTerrainWorkWhenBackgroundPaused()throws Exception{
         Path world=folder.resolve("world"),cache=folder.resolve("cache");Path region=SavedSurfaceReaderTest.world(world,0,0,SavedSurfaceReaderTest.record("full",0,0,4,true,2),1);byte[] original=Files.readAllBytes(region);
         try(SavedImageMap map=new SavedImageMap(cache)){map.register(info(world,UUID.randomUUID()));map.paused(true);map.enabled(true);for(int i=0;i<100;i++){assertNull(map.tile("world",0,0,0));assertEquals(0,((Number)map.manifest("world").get("renderedChunks")).intValue());}Thread.sleep(200);assertEquals(0,((Number)map.manifest("world").get("pendingTiles")).intValue());assertArrayEquals(original,Files.readAllBytes(region));}
@@ -78,7 +83,10 @@ class SavedImageMapTest {
     @Test void removedSavedChunkClearsOldImageAfterCoalescedScan()throws Exception{
         Path world=folder.resolve("remove"),cache=folder.resolve("remove-cache");AtomicLong time=new AtomicLong(System.currentTimeMillis());Path region=SavedSurfaceReaderTest.world(world,0,0,SavedSurfaceReaderTest.record("full",0,0,4,true,2),1);
         try(SavedImageMap map=new SavedImageMap(cache,time::get)){
-            map.register(info(world,UUID.randomUUID()));map.enabled(true);await(()->"ready".equals(map.manifest("world").get("status")));String before=map.tile("world",0,0,-1).etag();Files.delete(region);time.addAndGet(61000);await(()->number(map,"scannedAt")==time.get()&&"empty".equals(map.manifest("world").get("status")));
+            map.register(info(world,UUID.randomUUID()));map.enabled(true);
+            awaitRecovery(()->"ready".equals(map.manifest("world").get("status")),"Initial saved image generation",map);
+            String before=map.tile("world",0,0,-1).etag();Files.delete(region);time.addAndGet(61000);
+            awaitRecovery(()->number(map,"scannedAt")==time.get()&&"empty".equals(map.manifest("world").get("status")),"Removed chunk scan and pyramid drainage",map);
             assertEquals(0,number(map,"renderedChunks"));assertEquals(0,number(map,"pendingTiles"));assertNotEquals(before,map.tile("world",0,0,-1).etag());assertNull(map.manifest("world").get("bounds"));
         }
     }

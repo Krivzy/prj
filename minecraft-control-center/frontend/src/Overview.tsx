@@ -1,11 +1,10 @@
 import {lazy, Suspense, useEffect, useId, useState} from 'react';
 import {duration, formatNumber, time, useApp, useResource} from './context';
 import {useLive} from './live';
-import {ActionButton, Avatar, Button, Empty, Icon, ItemForm, Loading, Modal, Panel} from './ui';
-import {GameImage} from './assets';
+import {ActionButton, Avatar, Button, Empty, Icon, Loading, Panel} from './ui';
 import {RestartControl} from './ServerRestart';
 import {moduleEnabled} from './module-view';
-import type {Catalogs, Metric} from './types';
+import type {Metric} from './types';
 const OverworldScene = lazy(() => import('./OverworldScene'));
 const metrics = [
   {key:'tps',label:'TPS',color:'#82e6aa'}, {key:'mspt',label:'MSPT',color:'#f6b66a'},
@@ -38,21 +37,15 @@ export default function Overview() {
   const [selected,setSelected] = useState('');
   const [range,setRange] = useState('5m');
   const [metric,setMetric] = useState('tps');
-  const [give,setGive] = useState(false);
-  const [recipient,setRecipient] = useState('');
   const metricsEnabled = moduleEnabled(app.modules,'metrics');
   const playersEnabled = moduleEnabled(app.modules,'playerSnapshots');
-  const catalogEnabled = moduleEnabled(app.modules,'entitySnapshots');
   const timelineEnabled = moduleEnabled(app.modules,'timeline');
   const history = useResource<Metric[]>(metricsEnabled ? `/api/metrics?range=${range}` : null);
-  const catalogs = useResource<Catalogs>(give && catalogEnabled && playersEnabled ? '/api/catalogs' : null);
   useEffect(() => {if (!metricsEnabled) return; const timer = setInterval(() => {if (!document.hidden) history.reload();},15000); return () => clearInterval(timer);}, [range,metricsEnabled]);
-  useEffect(() => {if (!catalogEnabled || !playersEnabled) setGive(false);}, [catalogEnabled,playersEnabled]);
   if (!s) return <Loading/>;
   const world = s.worlds?.find(item => item.name === selected) ?? s.worlds?.[0];
   const online = players.filter(player => player.online);
   const chartMetric = metrics.find(item => item.key === metric)!;
-  const selectedPlayer = online.find(player => player.uuid === recipient) ?? online[0];
   const quick = [
     {id:'day',ru:'День',en:'Day',icon:'sun',action:'world.time',params:{world:world?.name,time:1000}},
     {id:'night',ru:'Ночь',en:'Night',icon:'moon',action:'world.time',params:{world:world?.name,time:13000}},
@@ -94,7 +87,7 @@ export default function Overview() {
       </Panel>
       <Panel className="online-panel"><div className="panel-heading"><div><span className="section-kicker">{app.t('Твоя команда','Your community')}</span><h2>{app.t('Сейчас в игре','Playing now')}</h2></div><span className="count-pill">{playersEnabled ? online.length : '—'}</span></div>
         {!playersEnabled ? <Empty title={app.t('Снимки игроков отключены','Player snapshots disabled')} icon="players"/> : online.length ? <div className="player-mini-list">{online.slice(0,5).map(player => <button key={player.uuid} onClick={() => app.navigate('players')}><Avatar name={player.name} small/><span><strong>{player.name}</strong><small>{player.world}</small></span><em>{player.ping} ms</em><Icon name="chevron" size={15}/></button>)}</div> : <div className="empty-player-scene"><span className="empty-pixel-person" aria-hidden="true">▣</span><strong>{app.t('Приключение начинается с тебя','The adventure starts with you')}</strong><small>{app.t('Игроки появятся здесь, когда войдут на сервер.','Players will appear here when they join.')}</small></div>}
-        <div className="players-footer"><Button className="text-button" disabled={!playersEnabled} onClick={() => app.navigate('players')}>{app.t('Все игроки','All players')}<Icon name="arrow" size={16}/></Button><Button disabled={!app.administrator || !playersEnabled || !catalogEnabled || !online.length} onClick={() => setGive(true)}><GameImage id="diamond" size={18}/>{app.t('Выдать предмет','Give item')}</Button></div>
+        <div className="players-footer"><Button className="text-button" disabled={!playersEnabled} onClick={() => app.navigate('players')}>{app.t('Все игроки','All players')}<Icon name="arrow" size={16}/></Button></div>
       </Panel>
       <Panel className="server-health"><div className="panel-heading"><div><span className="section-kicker">{app.t('Под капотом','Under the hood')}</span><h2>{app.t('Ресурсы','Resources')}</h2></div><span className="uptime-chip">{duration(s.uptimeSeconds)}</span></div>
         <div className="resource-meter"><span>CPU <b>{formatNumber(s.cpu,1)}%</b></span><i><b style={{width:`${typeof s.cpu === 'number' ? Math.max(0,Math.min(100,s.cpu)) : 0}%`}}/></i></div>
@@ -103,6 +96,5 @@ export default function Overview() {
       <Panel className="activity-panel"><div className="panel-heading"><h2>{app.t('Последние события','Recent activity')}</h2><Icon name="events" size={18}/></div>{!timelineEnabled ? <Empty title={app.t('Лента отключена','Activity feed disabled')} icon="events"/> : timeline.length ? <ol className="timeline">{timeline.slice(-5).reverse().map((entry,index) => <li key={`${entry.time}-${index}`}><i/><div><p>{String(entry.message ?? entry.text ?? entry.action ?? '')}</p><small>{time(entry.time ?? entry.timestamp)}</small></div></li>)}</ol> : <Empty title={app.t('События появятся здесь','Events will appear here')} icon="events"/>}</Panel>
       <div className="next-adventure"><span className="pixel-cross" aria-hidden="true"/><h2>{app.t('Что создадим дальше?','What will you build next?')}</h2><p>{app.t('Новый мир, событие или сценарий — выбирай свою следующую идею.','A new world, event or workflow. Make your next idea happen.')}</p><div><Button disabled={!moduleEnabled(app.modules,'events')} onClick={() => app.navigate('events')}>{app.t('Создать событие','Create an event')}<Icon name="arrow" size={16}/></Button>{app.administrator && <Button disabled={!moduleEnabled(app.modules,'automations')} onClick={() => app.navigate('automations')}>{app.t('Автоматизации','Automations')}<Icon name="arrow" size={16}/></Button>}</div></div>
     </div>
-    {give && <Modal title={app.t('Подарить предмет','Give an item')} close={() => setGive(false)}><div className="modal-body"><div className="recipient-select"><GameImage id="player_head" size={32}/><label><span>{app.t('Получатель','Recipient')}</span><select aria-label={app.t('Получатель','Recipient')} value={selectedPlayer?.uuid ?? ''} onChange={event => setRecipient(event.target.value)}>{online.map(player => <option key={player.uuid} value={player.uuid}>{player.name}</option>)}</select></label></div><ItemForm catalogs={catalogs.data} save={async item => {if (!selectedPlayer) return; await app.action('player.give',{uuid:selectedPlayer.uuid,item}); setGive(false);}} button={app.t('Выдать предмет','Give item')}/></div></Modal>}
   </div>;
 }

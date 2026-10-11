@@ -26,6 +26,8 @@ public final class OreMonitor implements Listener, AutoCloseable {
     private record Break(long eligibleTick,long occurredAt,BlockBreakEvent event,OreLedger.BlockKey key,String material,UUID player,String name,String world,boolean survival) implements Pending {}
     private record Place(long eligibleTick,long occurredAt,BlockPlaceEvent event,OreLedger.BlockKey key,String material) implements Pending {}
     private final JavaPlugin plugin;
+    // Stable across module toggles; a new plugin/server boot invalidates UI acknowledgements.
+    private final String bootId=UUID.randomUUID().toString();
     private final Map<OreKind,OreLedger.Threshold> thresholds;
     private final java.util.function.LongSupplier clock;
     private final ArrayDeque<Pending> pending=new ArrayDeque<>();
@@ -139,12 +141,12 @@ public final class OreMonitor implements Listener, AutoCloseable {
         coverage.put("partial",partial);value.put("coverage",Map.copyOf(coverage));
         value.put("ores",oreDefinitions());
         if(store!=null)value.put("persistence",store.state());
-        value.put("enabled",enabled);cached=Map.copyOf(value);
+        value.put("enabled",enabled);value.put("bootId",bootId);cached=Map.copyOf(value);
     }
     private List<Map<String,Object>> oreDefinitions(){return Arrays.stream(OreKind.values()).map(ore->Map.<String,Object>of("id",ore.id(),"material",ore.material,"yellow",thresholds.get(ore).yellow(),"red",thresholds.get(ore).red())).toList();}
     private Map<String,Object> empty(){
         LinkedHashMap<String,Object> value=new LinkedHashMap<>();value.put("generatedAt",clock.getAsLong());value.put("startedAt",0L);value.put("trackingSince",0L);value.put("observedSeconds",0L);value.put("windowSeconds",3600);value.put("windows",List.of(300,1800,3600));value.put("indicatorWindow",300);value.put("windowResolutionSeconds",1);value.put("ores",oreDefinitions());value.put("players",List.of());value.put("topPlayers",List.of());value.put("coverage",ledger.coverage(0));value.put("limits",Map.of("maxPlayers",256,"maxPlaced",65536,"maxBufferedBuckets",2048,"maxRecentRows",131072));value.put("persistence",Map.of("status",enabled?"loading":"disabled","pendingBlocks",0L,"droppedBlocks",0L,"lastFlushAt",0L,"errorCode",""));value.put("enabled",enabled);
-        return Map.copyOf(value);
+        value.put("bootId",bootId);return Map.copyOf(value);
     }
     private static OreLedger.BlockKey key(Block block){return new OreLedger.BlockKey(block.getWorld().getUID(),block.getX(),block.getY(),block.getZ());}
     private static void requireMain(){if(!Bukkit.isPrimaryThread())throw new IllegalStateException("Ore monitor requires server main thread");}

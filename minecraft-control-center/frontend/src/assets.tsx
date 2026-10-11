@@ -1,6 +1,7 @@
 import {useEffect,useState,useSyncExternalStore} from 'react';
 import type {CSSProperties,ReactNode} from 'react';
 import ModelIcon from './ModelIcon';
+import './PixelCursor.css';
 import type {BlockModel} from './BlockModel';
 export type AssetKind='items'|'blocks'|'mobs'|'effects'|'enchantments'|'art';
 export type AssetEntry=string|{image?:string;url?:string;name?:string;faces?:Record<string,string>;model?:BlockModel|string;animation?:{width:number;height:number;frameHeight:number;frames:number[];frameTime:number};head?:{x:number;y:number;width:number;height:number;atlasWidth:number;atlasHeight:number}};

@@ -1,0 +1,128 @@
+{
+  "project": "Cursors Extended",
+  "modrinth": "https://modrinth.com/mod/minecraft-cursor",
+  "repository": "https://github.com/fishstiz/cursors_extended",
+  "branchAtReview": "mc/26.3",
+  "commit": "a293ed53412d49c22107fb3cc409dbf68920998c",
+  "resourcePack": "default",
+  "originalBytes": true,
+  "license": {
+    "id": "MIT",
+    "copyright": "Copyright (c) 2025 fishstiz",
+    "localFile": "ce-LICENSE.txt",
+    "path": "LICENSE",
+    "sha256": "66fa54c0649cd4613e7ceadfecb419169f860a9adda0a2c970cb020dfe9c403c"
+  },
+  "assets": [
+    {
+      "name": "default",
+      "path": "common/src/main/resources/resourcepacks/default/assets/cursors_extended/textures/gui/sprites/cursors/default.png",
+      "localFile": "ce-default.png",
+      "sha256": "0482a4e7ca5805f59e27f45809082b4109ba91df4bf8750fa4e40b6baf18082c",
+      "bytes": 233,
+      "width": 32,
+      "height": 32,
+      "hotspot": [
+        0,
+        0
+      ],
+      "frames": 1,
+      "metadata": null
+    },
+    {
+      "name": "pointing_hand",
+      "path": "common/src/main/resources/resourcepacks/default/assets/cursors_extended/textures/gui/sprites/cursors/pointing_hand.png",
+      "localFile": "ce-pointing_hand.png",
+      "sha256": "84b73c93387f0a722fa9c0b184b17ae3277028b64ca62fb5902dc35b7c3b01bd",
+      "bytes": 252,
+      "width": 32,
+      "height": 32,
+      "hotspot": [
+        7,
+        0
+      ],
+      "frames": 1,
+      "metadata": {
+        "path": "common/src/main/resources/resourcepacks/default/assets/cursors_extended/textures/gui/sprites/cursors/pointing_hand.png.json",
+        "localFile": "ce-pointing_hand.png.json",
+        "sha256": "722c326684cb7c527e0862ac1d793bf942a9737af74c554539e1447efe8c9a38"
+      }
+    },
+    {
+      "name": "ibeam",
+      "path": "common/src/main/resources/resourcepacks/default/assets/cursors_extended/textures/gui/sprites/cursors/ibeam.png",
+      "localFile": "ce-ibeam.png",
+      "sha256": "6ed1327f5afe8458ebb568501b28c6eabe0c002beb79a2f29cb830b472329e0a",
+      "bytes": 279,
+      "width": 32,
+      "height": 32,
+      "hotspot": [
+        10,
+        12
+      ],
+      "frames": 1,
+      "metadata": {
+        "path": "common/src/main/resources/resourcepacks/default/assets/cursors_extended/textures/gui/sprites/cursors/ibeam.png.json",
+        "localFile": "ce-ibeam.png.json",
+        "sha256": "43598a451ef7aea9e94a851197db532d6340f32156f8b193249048a92a0f5583"
+      }
+    },
+    {
+      "name": "not_allowed",
+      "path": "common/src/main/resources/resourcepacks/default/assets/cursors_extended/textures/gui/sprites/cursors/not_allowed.png",
+      "localFile": "ce-not_allowed.png",
+      "sha256": "a0dbac4c89b4fda22df9f0f6e3992edbe4e0ebcba597b4e8ef98f932c534d07d",
+      "bytes": 286,
+      "width": 32,
+      "height": 32,
+      "hotspot": [
+        11,
+        11
+      ],
+      "frames": 1,
+      "metadata": {
+        "path": "common/src/main/resources/resourcepacks/default/assets/cursors_extended/textures/gui/sprites/cursors/not_allowed.png.json",
+        "localFile": "ce-not_allowed.png.json",
+        "sha256": "09d28326c398943fdec3e01b0d94e369543c8cc46ae85ae11c4b78af36b0cf3f"
+      }
+    },
+    {
+      "name": "grabbing",
+      "path": "common/src/main/resources/resourcepacks/default/assets/cursors_extended/textures/gui/sprites/cursors/grabbing.png",
+      "localFile": "ce-grabbing.png",
+      "sha256": "d1889b78b886f435542cb7b36e02c0c5ba6484472b0f7af464ef1def74faca10",
+      "bytes": 240,
+      "width": 32,
+      "height": 32,
+      "hotspot": [
+        10,
+        2
+      ],
+      "frames": 1,
+      "metadata": {
+        "path": "common/src/main/resources/resourcepacks/default/assets/cursors_extended/textures/gui/sprites/cursors/grabbing.png.json",
+        "localFile": "ce-grabbing.png.json",
+        "sha256": "009ec0a810304a786f0f92d58f1697727f8f74a8348154d9d1bca38a4d5cb7f8"
+      }
+    },
+    {
+      "name": "busy",
+      "path": "common/src/main/resources/resourcepacks/default/assets/cursors_extended/textures/gui/sprites/cursors/busy.png",
+      "localFile": "ce-busy.png",
+      "sha256": "56fb4e10585c1301c1b907a13c378dde68e354a1728610756ed7e23eea1cd169",
+      "bytes": 774,
+      "width": 32,
+      "height": 256,
+      "hotspot": [
+        0,
+        6
+      ],
+      "frames": 8,
+      "metadata": {
+        "path": "common/src/main/resources/resourcepacks/default/assets/cursors_extended/textures/gui/sprites/cursors/busy.png.json",
+        "localFile": "ce-busy.png.json",
+        "sha256": "7a448ed5ca6c79032f205c9ff8e3ce6169e2e076c983775b19e105313f57d036"
+      }
+    }
+  ]
+}

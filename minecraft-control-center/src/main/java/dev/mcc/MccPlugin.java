@@ -48,6 +48,7 @@ public final class MccPlugin extends JavaPlugin {
             main=new MainThread(this);
             integrations=new IntegrationService(this,main,(actor,write)->auth!=null&&auth.session(actor.id())==actor&&(write?actor.role().equals("Owner"):Set.of("Owner","Admin").contains(actor.role())));
             game=new GameService(this,this::gameEvent);game.externalManaged(integrations.externalPunishments());game.setCaptureModules(()->module("chat"),()->module("playerSnapshots"),()->module("entitySnapshots"));
+            integrations.cachedPlayers(game::knownPlayerIdentities);
             oreMonitor=new OreMonitor(this,getConfig().getConfigurationSection("ore-monitor"));
             Path serverRoot=Path.of("").toAbsolutePath().normalize();restart=new RestartService(serverRoot);
             kernelProfiles=new KernelProfiles(serverRoot,getDataFolder().toPath(),new BukkitKernelRuntime(main),Boolean.getBoolean("mcc.launcher.profile-hook"));

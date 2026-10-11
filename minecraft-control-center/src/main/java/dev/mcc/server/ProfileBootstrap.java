@@ -17,7 +17,10 @@ public final class ProfileBootstrap {
             if(!Set.of("--server-root","--plugin-data","--kernel","--minecraft-version").contains(key)||i+1>=args.length||values.putIfAbsent(key,args[++i])!=null)throw new IllegalArgumentException("Invalid prelaunch arguments");
         }
         if(!offline||values.size()!=4)throw new IllegalArgumentException("Prelaunch requires --offline and exact server-root, plugin-data, kernel, minecraft-version");
-        return KernelProfiles.reapplyOffline(Path.of(values.get("--server-root")),Path.of(values.get("--plugin-data")),values.get("--kernel"),values.get("--minecraft-version"));
+        Path root=Path.of(values.get("--server-root")),data=Path.of(values.get("--plugin-data"));
+        Map<String,Object> maintenance=dev.mcc.core.PluginMaintenanceBootstrap.runOffline(root,data);
+        Map<String,Object> result=new LinkedHashMap<>(KernelProfiles.reapplyOffline(root,data,values.get("--kernel"),values.get("--minecraft-version")));
+        result.put("pluginMaintenance",maintenance);return result;
     }
     private static String safeMessage(Exception e){return e instanceof IllegalArgumentException?"invalid arguments or selected profile":e instanceof java.io.IOException?"configuration, identity, lease, or backup validation failed":"profile operation failed";}
 }

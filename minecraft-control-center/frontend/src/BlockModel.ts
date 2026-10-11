@@ -1,8 +1,8 @@
 export type Point3=[number,number,number];
-export type ModelFace={texture:string;uv?:[number,number,number,number];rotation?:number;textureHeight?:number;frameIndex?:number};
+export type ModelFace={texture:string;uv?:[number,number,number,number];rotation?:number;textureHeight?:number;frameIndex?:number;tintindex?:number};
 export type ModelElement={from:Point3;to:Point3;faces:Record<string,ModelFace>;rotation?:{origin:Point3;axis:'x'|'y'|'z';angle:number;rescale?:boolean}};
 export type BlockModel={elements:ModelElement[]};
-export type ProjectedFace={points:[number,number][];uv:[number,number][];texture:string;shade:number;depth:number;textureHeight:number;frameIndex:number};
+export type ProjectedFace={points:[number,number][];uv:[number,number][];texture:string;shade:number;depth:number;textureHeight:number;frameIndex:number;tintindex?:number};
 const validPoint=(p:Point3)=>Array.isArray(p)&&p.length===3&&p.every(n=>Number.isFinite(n)&&Math.abs(n)<=64);
 const project=([x,y,z]:Point3):[number,number]=>[(x+z)*Math.SQRT1_2,(x-z)*.3535533905932738-y*.8660254037844386];
 function rotate(p:Point3,r:ModelElement['rotation']):Point3{
@@ -36,7 +36,8 @@ export function projectModel(model:BlockModel):ProjectedFace[]{
       uv=uv.map((_,i)=>uv[(i+turns+4)%4]);
       const textureHeight=face.textureHeight??16,frameIndex=face.frameIndex??0;
       if(!Number.isFinite(textureHeight)||textureHeight<16||textureHeight>16384||!Number.isInteger(frameIndex)||frameIndex<0||frameIndex*16>=textureHeight)continue;
-      faces.push({points,uv,texture:face.texture,shade:shape.shade,depth:corners.reduce((sum,[x,y,z])=>sum+x+y-z,0)/4,textureHeight,frameIndex});
+      const tintindex=typeof face.tintindex==='number'&&Number.isInteger(face.tintindex)&&face.tintindex>=0&&face.tintindex<=15?face.tintindex:undefined;
+      faces.push({points,uv,texture:face.texture,shade:shape.shade,depth:corners.reduce((sum,[x,y,z])=>sum+x+y-z,0)/4,textureHeight,frameIndex,...(tintindex===undefined?{}:{tintindex})});
     }
   }
   if(!faces.length)return [];

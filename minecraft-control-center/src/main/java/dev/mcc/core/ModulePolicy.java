@@ -26,7 +26,7 @@ public final class ModulePolicy {
         if(path.startsWith("/api/events"))return "events";
         if(path.startsWith("/api/players"))return "playerSnapshots";
         if(path.equals("/api/entities")||path.equals("/api/catalogs"))return "entitySnapshots";
-        if(path.startsWith("/api/plugins/catalog"))return "catalog";
+        if(path.startsWith("/api/plugins/catalog")||path.equals("/api/plugins/manage")||path.startsWith("/api/plugins/remove")||path.equals("/api/plugins/restore"))return "catalog";
         return switch(path){case "/api/metrics"->"metrics";case "/api/audit"->"timeline";case "/api/chat"->"chat";case "/api/console"->"console";default->"";};
     }
     public static String actionModule(String action){

@@ -1,0 +1,6 @@
+export type PunishmentSource={id:string;title:string;version:string};
+export type PunishmentRecord={id:number;historyId:number;activeId:number;name:string;uuid:string;identityUuid:string;identityVerified:boolean;reason:string;operator:string;start:number;end:number;type:string;category:string;status:string;revision:string;source:PunishmentSource;revocationDetailsAvailable:boolean};
+export function recordKey(row:PunishmentRecord){return `${row.source.id}:${row.historyId?'history':'active'}:${row.historyId||row.activeId||row.id}`;}
+export function canRevoke(row:PunishmentRecord){return row.status==='active'&&row.activeId>0&&row.identityVerified&&/^[a-f0-9]{64}$/.test(row.revision)&&row.type!=='KICK'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(row.identityUuid);}
+export function durationSeconds(amount:string,unit:string){const value=Number(amount),factor=({minutes:60,hours:3600,days:86400,permanent:0} as Record<string,number>)[unit];if(!Number.isInteger(value)||value<1||!Number.isFinite(factor))throw new Error('Invalid duration');const seconds=value*factor;if(!Number.isSafeInteger(seconds)||seconds>315360000)throw new Error('Duration exceeds ten years');return seconds;}
+export function durationParts(start:number,end:number){if(end<=0)return null;return Math.max(0,Math.floor((end-start)/1000));}

@@ -87,6 +87,13 @@ public final class GameService implements Listener, AutoCloseable {
         restored.forEach((uuid, name) -> { if (name != null && name.length() <= 100) knownNames.putIfAbsent(uuid, name); });
     }
 
+    /** Memory-only identities for optional integrations; never loads player files or requests Mojang. */
+    public List<Map<String,Object>> knownPlayerIdentities() {
+        return knownNames.entrySet().stream().limit(2048)
+                .map(entry->Map.<String,Object>of("uuid",entry.getKey().toString(),"name",entry.getValue()))
+                .sorted(Comparator.comparing(value->String.valueOf(value.get("name")),String.CASE_INSENSITIVE_ORDER)).toList();
+    }
+
     public void setEventsEnabled(boolean enabled) {
         requireMainThread();
         if (enabled == eventsEnabled) return;
@@ -219,7 +226,7 @@ public final class GameService implements Listener, AutoCloseable {
 
     public List<Map<String, Object>> plugins() {
         requireMainThread();
-        return Arrays.stream(Bukkit.getPluginManager().getPlugins()).map(p -> map("name", p.getName(), "version", p.getDescription().getVersion(), "enabled", p.isEnabled(), "authors", p.getDescription().getAuthors(), "description", p.getDescription().getDescription())).toList();
+        return Arrays.stream(Bukkit.getPluginManager().getPlugins()).map(p -> map("name", p.getName(), "version", p.getDescription().getVersion(), "enabled", p.isEnabled(), "authors", p.getDescription().getAuthors(), "description", p.getDescription().getDescription(), "required", p.getDescription().getDepend(), "provides", p.getDescription().getProvides())).toList();
     }
 
     /** Bounded inspector query near an explicitly chosen loaded location. */

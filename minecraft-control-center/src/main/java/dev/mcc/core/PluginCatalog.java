@@ -20,7 +20,7 @@ public final class PluginCatalog implements AutoCloseable {
     private static final int JSON_LIMIT=8*1024*1024,JAR_LIMIT=64*1024*1024,MAX_PLAN_FILES=8;
     private static final long PLAN_TTL=5*60_000L,CACHE_TTL=5*60_000L,STALE_TTL=30*60_000L;
     private final Database db;private final Path data,plugins,transactions;private final String minecraft;
-    private final Supplier<List<Map<String,Object>>> installed;private final Transport transport;private final Clock clock;
+    private final Supplier<List<Map<String,Object>>> installed;private final Transport transport;private final Clock clock;private final PluginLifecycle lifecycle;
     private final ThreadPoolExecutor worker=new ThreadPoolExecutor(2,2,0,TimeUnit.SECONDS,new ArrayBlockingQueue<>(24),r->{Thread thread=new Thread(r,"MCC-PluginCatalog");thread.setDaemon(true);return thread;});
     private final ThreadPoolExecutor metadataWorker=new ThreadPoolExecutor(4,4,0,TimeUnit.SECONDS,new ArrayBlockingQueue<>(48),r->{Thread thread=new Thread(r,"MCC-CatalogMetadata");thread.setDaemon(true);return thread;});
     private final Set<CompletableFuture<?>> pending=ConcurrentHashMap.newKeySet();
@@ -35,6 +35,9 @@ public final class PluginCatalog implements AutoCloseable {
     private record Plan(String id,String actor,String projectId,String title,long expires,List<FileSpec> files,List<String> warnings) {}
     private record Download(FileSpec spec,Path path,PluginJar.Metadata metadata,String sha256) {}
     private record Featured(String id,String title,String url,String description) {}
+    /** Curated upstream project IDs and verified descriptor names, never fuzzy title/slug guesses. */
+    private static final Map<String,Set<String>> MANUAL_IDENTITIES=Map.of("Vebnzrzj",Set.of("luckperms"),"P1OZGk5p",Set.of("viaversion"),"fALzjamp",Set.of("chunky"));
+    private record PresentPlugin(String name,String version,List<String> provides,Boolean enabled){boolean matches(String identity){return name.equalsIgnoreCase(identity)||provides.stream().anyMatch(p->p.equalsIgnoreCase(identity));}}
     private static final List<Featured> FEATURED=List.of(
         new Featured("Vebnzrzj","LuckPerms","https://luckperms.net/","Permissions and groups"),
         new Featured("hXiIvTyT","EssentialsX","https://essentialsx.net/","Commands, homes and economy"),
@@ -67,6 +70,7 @@ public final class PluginCatalog implements AutoCloseable {
         plugins=data.getParent().toRealPath();if(!Files.isDirectory(plugins))throw new IOException("Plugins directory is missing");
         transactions=data.resolve("catalog-transactions");if(Files.isSymbolicLink(transactions)||(Files.exists(transactions,LinkOption.NOFOLLOW_LINKS)&&!Files.isDirectory(transactions,LinkOption.NOFOLLOW_LINKS)))throw new IOException("Catalog transaction path is unsafe");Files.createDirectories(transactions);
         if(!transactions.toRealPath().equals(data.toRealPath().resolve("catalog-transactions")))throw new IOException("Catalog transaction directory resolves outside MCC data");PrivateFiles.restrict(transactions,true);
+        lifecycle=new PluginLifecycle(data,installed,()->Boolean.getBoolean("mcc.launcher.profile-hook"),clock);
     }
     public CompletableFuture<Map<String,Object>> search(String query,String sort,int offset,int limit,boolean compatible,boolean featured) {
         return submit(()->searchNow(query,sort,offset,limit,compatible,featured),17);
@@ -74,9 +78,13 @@ public final class PluginCatalog implements AutoCloseable {
     public CompletableFuture<Map<String,Object>> plan(String projectId,String actor){return submit(()->planNow(projectId,actor),15);}
     public CompletableFuture<Map<String,Object>> install(String planId,String actor){return install(planId,actor,()->true);}
     public CompletableFuture<Map<String,Object>> install(String planId,String actor,BooleanSupplier authority){Objects.requireNonNull(authority);return submit(()->installNow(planId,actor,authority));}
+    public CompletableFuture<Map<String,Object>> managedPlugins(){return submit(()->{synchronized(this){return lifecycle.list();}});}
+    public CompletableFuture<Map<String,Object>> removalPlan(String name,String actor){return submit(()->{synchronized(this){return lifecycle.plan(name,actor);}});}
+    public CompletableFuture<Map<String,Object>> remove(String planId,String actor,BooleanSupplier authority){Objects.requireNonNull(authority);return submit(()->{synchronized(this){return lifecycle.remove(planId,actor,()->!closed&&authority.getAsBoolean());}});}
+    public CompletableFuture<Map<String,Object>> restore(String removalId,String actor,BooleanSupplier authority){Objects.requireNonNull(authority);return submit(()->{synchronized(this){return lifecycle.restore(removalId,actor,()->!closed&&authority.getAsBoolean());}});}
     public CompletableFuture<List<Map<String,Object>>> installedCatalog(){return submit(()->{
         List<Map<String,Object>> active=installed.get();List<Map<String,Object>> result=new ArrayList<>();
-        for(Map<String,Object> record:db.documents("catalog-installs").get()){Map<String,Object> row=new LinkedHashMap<>(record);String name=Objects.toString(record.get("name"),"");String version=Objects.toString(record.get("version"),"");Optional<Map<String,Object>> match=active.stream().filter(p->name.equalsIgnoreCase(Objects.toString(p.get("name"),""))&&version.equals(Objects.toString(p.get("version"),""))).findFirst();boolean loaded=match.isPresent()&&Boolean.TRUE.equals(match.get().get("enabled"));row.put("status",loaded?"loaded":match.isPresent()?"disabled":"installed-pending-restart");row.put("requiresRestart",match.isEmpty());result.add(row);}return result;
+        for(Map<String,Object> record:db.documents("catalog-installs").get()){Map<String,Object> row=new LinkedHashMap<>(record);String name=Objects.toString(record.get("name"),"");String version=Objects.toString(record.get("version"),"");Optional<Map<String,Object>> match=active.stream().filter(p->name.equalsIgnoreCase(Objects.toString(p.get("name"),""))&&version.equals(Objects.toString(p.get("version"),""))).findFirst();boolean loaded=match.isPresent()&&Boolean.TRUE.equals(match.get().get("enabled"));boolean present=match.isPresent()||findExistingJar(name.toLowerCase(Locale.ROOT))!=null;row.put("status",loaded?"loaded":match.isPresent()?"disabled":present?"installed-pending-restart":"missing");row.put("requiresRestart",match.isEmpty()&&present);result.add(row);}return result;
     });}
     private Map<String,Object> searchNow(String query,String sort,int offset,int limit,boolean compatible,boolean featured)throws Exception {
         if(query==null||query.length()>120||query.chars().anyMatch(Character::isISOControl)||offset<0||offset>1000000||limit<1||limit>24||!Set.of("downloads","follows","updated","newest","relevance").contains(sort))throw new IllegalArgumentException("Invalid catalog search");
@@ -98,7 +106,13 @@ public final class PluginCatalog implements AutoCloseable {
         }
         List<Future<Map<String,Object>>> futures=new ArrayList<>();for(Callable<Map<String,Object>> job:jobs)try{futures.add(metadataWorker.submit(()->{if(System.nanoTime()>deadline)throw new IOException("Metadata deadline reached");return job.call();}));}catch(RejectedExecutionException error){futures.add(CompletableFuture.failedFuture(error));}
         try{for(int i=0;i<futures.size();i++){Map<String,Object> item;try{long remaining=Math.max(1,deadline-System.nanoTime());item=futures.get(i).get(remaining,TimeUnit.NANOSECONDS);}catch(ExecutionException|TimeoutException error){item=fallbacks.get(i);futures.get(i).cancel(true);}items.add(item);stale|=Boolean.TRUE.equals(item.get("stale"));}}finally{for(Future<?> future:futures)if(!future.isDone())future.cancel(true);}
+        annotateInstalled(items);
         Map<String,Object> result=new LinkedHashMap<>();result.put("minecraftVersion",minecraft);result.put("platform","paper");result.put("source","modrinth");result.put("total",total);result.put("offset",offset);result.put("limit",limit);result.put("items",items);result.put("stale",stale);result.put("featured",featured);result.put("compatibilityBasis","publisher-metadata");return result;
+    }
+    private void annotateInstalled(List<Map<String,Object>> cards)throws Exception {
+        Map<String,Map<String,Object>> records=new HashMap<>();for(Map<String,Object> record:db.documents("catalog-installs").get())records.put(record.get("projectId").toString(),record);
+        List<PresentPlugin> present=presentPlugins();
+        for(Map<String,Object> card:cards){Map<String,Object> record=records.get(card.get("projectId"));Set<String> identities=record==null?MANUAL_IDENTITIES.getOrDefault(card.get("projectId"),Set.of()):Set.of(record.get("name").toString().toLowerCase(Locale.ROOT));Optional<PresentPlugin> match=present.stream().filter(p->identities.stream().anyMatch(p::matches)).findFirst();if(match.isEmpty())continue;PresentPlugin plugin=match.get();card.put("installation",Map.of("name",plugin.name(),"version",plugin.version(),"status",plugin.enabled()==null?"installed-pending-restart":plugin.enabled()?"loaded":"disabled","requiresRestart",plugin.enabled()==null,"source",record==null?"manual-identity":"catalog-record"));}
     }
     private Map<String,Object> unavailable(String title,String url,String description){Map<String,Object> card=new LinkedHashMap<>();card.put("projectId","");card.put("title",title);card.put("description",description);card.put("url",url);card.put("downloads",0);card.put("featured",true);card.put("compatibility","unavailable");card.put("reason","No verified exact-version artifact in this catalog");return card;}
     private Map<String,Object> baseCard(JsonNode project) {
@@ -153,7 +167,7 @@ public final class PluginCatalog implements AutoCloseable {
     private synchronized Map<String,Object> installNow(String planId,String actor,BooleanSupplier authority)throws Exception {
         authorized(authority);
         UUID.fromString(planId);Plan plan;synchronized(plans){plan=plans.get(planId);if(plan==null||plan.expires()<clock.millis())throw new IllegalArgumentException("Installation plan expired; review a new plan");if(!plan.actor().equals(actor))throw new SecurityException("Installation plan belongs to another account");plans.remove(planId);}
-        checkFolders();Path transaction=transactions.resolve(plan.id());Files.createDirectory(transaction);PrivateFiles.restrict(transaction,true);List<Download> downloaded=new ArrayList<>();List<PluginJar.Metadata> verifiedMetadata=new ArrayList<>();List<Path> committed=new ArrayList<>();
+        checkFolders();Path transaction=transactions.resolve(plan.id());Files.createDirectory(transaction);PrivateFiles.restrict(transaction,true);List<Download> downloaded=new ArrayList<>();List<Map<String,Object>> reused=new ArrayList<>();List<PluginJar.Metadata> verifiedMetadata=new ArrayList<>();List<Path> committed=new ArrayList<>();
         try {
             Map<String,String> existing=existingVersions();Set<String> occupied=new HashSet<>(existing.keySet());
             for(FileSpec spec:plan.files()) {
@@ -162,37 +176,42 @@ public final class PluginCatalog implements AutoCloseable {
                 Files.write(target,bytes,StandardOpenOption.CREATE_NEW);PrivateFiles.restrict(target,false);String sha=hash(bytes,"SHA-256");bytes=null;
                 PluginJar.Metadata metadata=PluginJar.inspect(target,minecraft);String identity=metadata.name().toLowerCase(Locale.ROOT);
                 verifiedMetadata.add(metadata);
-                if(spec.dependency()&&metadata.version().equals(existing.get(identity))){Path existingJar=findExistingJar(identity);if(existingJar==null||!fileHash(existingJar,"SHA-512").equals(spec.sha512()))throw new IllegalArgumentException("Installed dependency has different bytes from the verified release: "+metadata.name());Files.delete(target);continue;}
+                if(metadata.version().equals(existing.get(identity))){Path existingJar=findExistingJar(identity);if(existingJar==null||!fileHash(existingJar,"SHA-512").equals(spec.sha512()))throw new IllegalArgumentException("Installed plugin has different bytes from the verified release: "+metadata.name());if(!spec.dependency()){Map<String,Object> record=installRecord(spec,metadata,existingJar,sha);boolean active=installed.get().stream().anyMatch(p->metadata.name().equalsIgnoreCase(Objects.toString(p.get("name"),""))&&metadata.version().equals(p.get("version")));record.put("status",active?"loaded":"installed-pending-restart");record.put("requiresRestart",!active);reused.add(record);}Files.delete(target);continue;}
                 if(!occupied.add(identity))throw new IllegalArgumentException("Plugin is already installed or pending: "+metadata.name());for(String provide:metadata.provides())if(!occupied.add(provide.toLowerCase(Locale.ROOT)))throw new IllegalArgumentException("Plugin capability conflicts with an installed plugin: "+provide);
                 downloaded.add(new Download(spec,target,metadata,sha));
             }
             for(PluginJar.Metadata metadata:verifiedMetadata)for(String dependency:metadata.required())if(!occupied.contains(dependency.toLowerCase(Locale.ROOT)))throw new IllegalArgumentException("JAR declares an unresolved required dependency: "+dependency);
             // Nothing enters plugins/ until the entire dependency set has downloaded and validated.
             authorized(authority);checkFolders();Set<String> recheck=existingVersions().keySet();for(Download download:downloaded){List<String> identities=new ArrayList<>(download.metadata().provides());identities.add(download.metadata().name());for(String name:identities)if(recheck.contains(name.toLowerCase(Locale.ROOT)))throw new IllegalArgumentException("Plugin appeared during installation; review a new plan");}
-            List<Map<String,Object>> result=new ArrayList<>();for(Download download:downloaded) {
+            List<Map<String,Object>> result=new ArrayList<>(reused);for(Download download:downloaded) {
                 authorized(authority);
                 Path destination=plugins.resolve(download.path().getFileName());if(Files.exists(destination,LinkOption.NOFOLLOW_LINKS))throw new IOException("Plugin target already exists");
                 // A same-filesystem hard link is an atomic CREATE_NEW publication: it cannot replace an existing JAR.
                 Files.createLink(destination,download.path());committed.add(destination);Files.delete(download.path());
-                Map<String,Object> record=new LinkedHashMap<>();record.put("name",download.metadata().name());record.put("version",download.metadata().version());record.put("file",destination.getFileName().toString());record.put("projectId",download.spec().projectId());record.put("versionId",download.spec().versionId());record.put("sha256",download.sha256());record.put("sha512",download.spec().sha512());record.put("size",download.spec().size());record.put("time",clock.millis());record.put("status","installed-pending-restart");record.put("requiresRestart",true);record.put("source","modrinth");
+                Map<String,Object> record=installRecord(download.spec(),download.metadata(),destination,download.sha256());
                 result.add(record);
             }
+            for(Map<String,Object> record:reused){authorized(authority);Path existingJar=plugins.resolve(record.get("file").toString());if(Files.isSymbolicLink(existingJar)||!fileHash(existingJar,"SHA-256").equals(record.get("sha256")))throw new IllegalArgumentException("Reused plugin changed during installation; review a new plan");}
             // The complete install history commits in one database transaction; a failure rolls back only our new files.
             authorized(authority);db.submit(connection->{authorized(authority);connection.setAutoCommit(false);try(PreparedStatement statement=connection.prepareStatement("INSERT INTO documents(namespace,id,json) VALUES('catalog-installs',?,?) ON CONFLICT(namespace,id) DO UPDATE SET json=excluded.json")){for(Map<String,Object> record:result){statement.setString(1,record.get("projectId").toString());statement.setString(2,Json.write(record));statement.addBatch();}statement.executeBatch();authorized(authority);connection.commit();return null;}catch(Exception error){connection.rollback();throw error;}finally{connection.setAutoCommit(true);}}).join();
-            return Map.of("status","installed-pending-restart","requiresRestart",true,"installed",result,"message","JAR files installed. Restart the server to activate them.");
+            boolean restart=result.stream().anyMatch(r->Boolean.TRUE.equals(r.get("requiresRestart")));return Map.of("status",downloaded.isEmpty()?"already-installed":"installed-pending-restart","requiresRestart",restart,"installed",result,"message",downloaded.isEmpty()?"The verified release is already installed; existing files were preserved.":"JAR files installed. Restart the server to activate them.");
         }catch(Exception error) {
             for(Path path:committed)try{Download own=downloaded.stream().filter(d->d.path().getFileName().equals(path.getFileName())).findFirst().orElseThrow();if(!Files.isSymbolicLink(path)&&hash(Files.readAllBytes(path),"SHA-256").equals(own.sha256()))Files.deleteIfExists(path);else throw new IOException("Rollback target changed externally");}catch(Exception rollback){error.addSuppressed(rollback);}throw error;
         }finally {
             try(DirectoryStream<Path> files=Files.newDirectoryStream(transaction)){for(Path file:files)Files.deleteIfExists(file);}Files.deleteIfExists(transaction);
         }
     }
+    private Map<String,Object> installRecord(FileSpec spec,PluginJar.Metadata metadata,Path file,String sha){Map<String,Object> record=new LinkedHashMap<>();record.put("name",metadata.name());record.put("version",metadata.version());record.put("file",file.getFileName().toString());record.put("projectId",spec.projectId());record.put("versionId",spec.versionId());record.put("sha256",sha);record.put("sha512",spec.sha512());record.put("size",spec.size());record.put("time",clock.millis());record.put("status","installed-pending-restart");record.put("requiresRestart",true);record.put("source","modrinth");return record;}
     private Map<String,String> existingVersions()throws Exception {
-        Map<String,String> names=new HashMap<>();for(Map<String,Object> plugin:installed.get()){String version=Objects.toString(plugin.get("version"),"");names.put(Objects.toString(plugin.get("name"),"").toLowerCase(Locale.ROOT),version);Object provides=plugin.get("provides");if(provides instanceof List<?> list)for(Object name:list)names.put(name.toString().toLowerCase(Locale.ROOT),version);}
-        int count=0;try(DirectoryStream<Path> jars=Files.newDirectoryStream(plugins)){for(Path jar:jars){if(!jar.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar"))continue;if(++count>512||Files.isSymbolicLink(jar)||!Files.isRegularFile(jar,LinkOption.NOFOLLOW_LINKS)||Files.size(jar)>JAR_LIMIT)throw new IOException("Unsafe or oversized plugins directory");PluginJar.Metadata metadata=PluginJar.inspectExisting(jar);names.put(metadata.name().toLowerCase(Locale.ROOT),metadata.version());for(String provides:metadata.provides())names.put(provides.toLowerCase(Locale.ROOT),metadata.version());}}return names;
+        Map<String,String> names=new HashMap<>();for(PresentPlugin plugin:presentPlugins()){names.put(plugin.name().toLowerCase(Locale.ROOT),plugin.version());for(String provides:plugin.provides())names.put(provides.toLowerCase(Locale.ROOT),plugin.version());}return names;
+    }
+    private List<PresentPlugin> presentPlugins()throws IOException {
+        checkFolders();List<PresentPlugin> present=new ArrayList<>();for(Map<String,Object> plugin:installed.get()){List<String> provides=plugin.get("provides") instanceof List<?> values?values.stream().map(Object::toString).toList():List.of();present.add(new PresentPlugin(Objects.toString(plugin.get("name"),""),Objects.toString(plugin.get("version"),""),provides,Boolean.TRUE.equals(plugin.get("enabled"))));}
+        int count=0;try(DirectoryStream<Path> jars=Files.newDirectoryStream(plugins)){for(Path jar:jars){if(!jar.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar"))continue;if(++count>512||Files.isSymbolicLink(jar)||!Files.isRegularFile(jar,LinkOption.NOFOLLOW_LINKS)||Files.size(jar)>JAR_LIMIT)throw new IOException("Unsafe or oversized plugins directory");PluginJar.Metadata metadata=PluginJar.inspectExisting(jar);present.add(new PresentPlugin(metadata.name(),metadata.version(),metadata.provides(),null));}}return present;
     }
     private void cancelled(){if(closed||Thread.currentThread().isInterrupted())throw new CancellationException("Catalog installation cancelled");}
     private void authorized(BooleanSupplier authority){cancelled();if(!authority.getAsBoolean())throw new SecurityException("Owner session is no longer active; installation cancelled");}
-    private Path findExistingJar(String identity)throws IOException {try(DirectoryStream<Path> jars=Files.newDirectoryStream(plugins)){for(Path jar:jars){if(jar.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar")&&!Files.isSymbolicLink(jar)&&PluginJar.inspectExisting(jar).name().equalsIgnoreCase(identity))return jar;}}return null;}
+    private Path findExistingJar(String identity)throws IOException {Path found=null;int count=0;try(DirectoryStream<Path> jars=Files.newDirectoryStream(plugins)){for(Path jar:jars){if(!jar.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar"))continue;if(++count>512||Files.isSymbolicLink(jar)||!Files.isRegularFile(jar,LinkOption.NOFOLLOW_LINKS)||Files.size(jar)>JAR_LIMIT)throw new IOException("Unsafe or oversized plugins directory");if(PluginJar.inspectExisting(jar).name().equalsIgnoreCase(identity)){if(found!=null)throw new IOException("Ambiguous plugin JAR identity");found=jar;}}}return found;}
     private static String fileHash(Path file,String algorithm)throws Exception {MessageDigest digest=MessageDigest.getInstance(algorithm);long bytes=0;try(InputStream in=Files.newInputStream(file)){byte[] buffer=new byte[32768];int n;while((n=in.read(buffer))!=-1){if((bytes+=n)>JAR_LIMIT)throw new IOException("Existing JAR exceeds its limit");digest.update(buffer,0,n);}}return HexFormat.of().formatHex(digest.digest());}
     private void checkFolders()throws IOException {if(Files.isSymbolicLink(data)||Files.isSymbolicLink(plugins)||Files.isSymbolicLink(transactions)||!plugins.equals(plugins.toRealPath())||!transactions.toRealPath().startsWith(data.toRealPath()))throw new IOException("Catalog directory changed or is unsafe");}
     private Response json(String path)throws Exception {

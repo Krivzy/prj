@@ -21,6 +21,7 @@ public final class IntegrationService implements AutoCloseable {
         boolean active(Binding binding)throws Exception;
         Location location(String world,int x,int y,int z)throws Exception;
         default boolean playerMatches(String name,UUID uuid)throws Exception{return false;}
+        default List<Map<String,Object>> onlinePlayers()throws Exception{return List.of();}
         default List<Map<String,Object>> permissions()throws Exception{return List.of();}
         default void clearCaches(){}
     }
@@ -32,14 +33,20 @@ public final class IntegrationService implements AutoCloseable {
     private final Set<CompletableFuture<?>> pending=ConcurrentHashMap.newKeySet();
     private final Object[] stripes=new Object[32];
     private IntegrationPresence presence;
+    private final PunishmentRevisions punishmentRevisions=new PunishmentRevisions();
+    private volatile Supplier<List<Map<String,Object>>> cachedPlayerSupplier=List::of;
     public IntegrationService(JavaPlugin plugin,MainThread main,BiPredicate<Auth.Session,Boolean> authority){this(new BukkitRuntime(main),authority);presence=new IntegrationPresence(plugin);}
     public IntegrationService(Runtime runtime,BiPredicate<Auth.Session,Boolean> authority){this.runtime=Objects.requireNonNull(runtime);this.authority=Objects.requireNonNull(authority);Arrays.setAll(stripes,i->new Object());workers.setKeepAliveTime(30,TimeUnit.SECONDS);workers.allowCoreThreadTimeOut(true);}
+    /** Supply already-restored memory identities only; never Bukkit walks/JDBC/network here. */
+    public void cachedPlayers(Supplier<List<Map<String,Object>>> supplier){cachedPlayerSupplier=Objects.requireNonNull(supplier);}
+    private List<Map<String,Object>> cachedPlayers()throws Exception{return CachedPlayerDirectory.merge(cachedPlayerSupplier.get(),runtime.onlinePlayers());}
+    private boolean playerMatches(String name,UUID uuid)throws Exception{return runtime.playerMatches(name,uuid)||CachedPlayerDirectory.matches(cachedPlayers(),name,uuid);}
     /** Release panel work while retaining the independent native moderation ownership guard. */
     public synchronized void setEnabled(boolean value){
         if(closed.get()||enabled.get()==value)return;
         lifecycle.incrementAndGet();
         enabled.set(value);
-        if(!value){for(CompletableFuture<?> future:pending)future.cancel(false);workers.getQueue().clear();runtime.clearCaches();}
+        if(!value){for(CompletableFuture<?> future:pending)future.cancel(false);workers.getQueue().clear();runtime.clearCaches();punishmentRevisions.clear();}
     }
     public CompletableFuture<Map<String,Object>> discover(Auth.Session actor){return submit(epoch->{
         authorize(actor,false,epoch);List<Map<String,Object>> items=new ArrayList<>();List<Binding> bindings=bindings();String punishment=PunishmentProviders.selected(bindings);
@@ -63,11 +70,20 @@ public final class IntegrationService implements AutoCloseable {
         Binding binding=bind(actor,id,false,epoch);Map<String,Object> result=switch(id){
             case "luckperms"->"suggestions".equals(input.get("action"))?PermissionSuggestions.query(input,runtime.permissions()):new LuckPermsIntegration(binding).query(input);
             case "coreprotect"->CoreProtectIntegration.lookup(binding,input,runtime);
-            case "advancedban"->new AdvancedBanIntegration(binding).query(input);
+            case "advancedban"->punishments(actor,binding,input,epoch);
             case "grim"->GrimIntegration.query(binding,input);
             default->throw new IllegalArgumentException("Unknown integration");
         };authorize(actor,false,epoch);if(!runtime.active(binding))throw new IllegalStateException("Plugin is no longer enabled");return result;
     });}
+    private Map<String,Object> punishments(Auth.Session actor,Binding binding,Map<String,Object> input,long epoch)throws Exception {
+        List<Map<String,Object>> players=cachedPlayers();if("players".equals(input.get("action")))return CachedPlayerDirectory.page(players,input);
+        Map<String,Object> result=new AdvancedBanIntegration(binding).query(input);List<Map<String,Object>> items=new ArrayList<>();
+        for(Object value:(List<?>)result.get("items")){
+            if(!(value instanceof Map<?,?> row))throw new IllegalStateException("Invalid punishment record");Map<String,Object> copy=new LinkedHashMap<>();row.forEach((k,v)->copy.put(String.valueOf(k),v));
+            Map<String,Object> identity=CachedPlayerDirectory.identity(players,String.valueOf(row.get("name")),String.valueOf(row.get("uuid")));copy.put("identityVerified",!identity.isEmpty());copy.put("identityUuid",identity.getOrDefault("uuid",""));punishmentRevisions.issue(actor.id(),String.valueOf(row.get("revision")),binding.identity(),epoch);items.add(Collections.unmodifiableMap(copy));
+        }
+        Map<String,Object> out=new LinkedHashMap<>(result);out.put("items",List.copyOf(items));out.put("revisionTtlMillis",PunishmentRevisions.TTL_MILLIS);return Collections.unmodifiableMap(out);
+    }
     public CompletableFuture<Map<String,Object>> mutate(Auth.Session actor,String id,Map<String,Object> body){Map<String,Object> input=copy(body);return submit(epoch->{
         IntegrationValidation.confirmed(input);Binding binding=bind(actor,id,true,epoch);
         Runnable guard=()->{try{authorize(actor,true,epoch);if(closed.get()||!runtime.active(binding))throw new IllegalStateException("Plugin is no longer enabled");}catch(RuntimeException e){throw e;}catch(Exception e){throw new IllegalStateException("Plugin availability check failed",e);}};
@@ -76,7 +92,7 @@ public final class IntegrationService implements AutoCloseable {
         synchronized(stripes[(key.hashCode()&Integer.MAX_VALUE)%stripes.length]){
             guard.run();return switch(id){
                 case "luckperms"->new LuckPermsIntegration(binding).mutate(input,guard);
-                case "advancedban"->{String player=IntegrationValidation.player(input,"player");UUID uuid=IntegrationValidation.uuid(IntegrationValidation.text(input,"uuid","",36));if(!runtime.playerMatches(player,uuid))throw new IllegalArgumentException("Player name and UUID must match a cached server player");yield new AdvancedBanIntegration(binding).mutate(input,actor.name(),guard);}
+                case "advancedban"->{String player=IntegrationValidation.player(input,"player");UUID uuid=IntegrationValidation.uuid(IntegrationValidation.text(input,"uuid","",36));Runnable identityGuard=()->{guard.run();if("revoke".equals(input.get("action")))punishmentRevisions.require(actor.id(),IntegrationValidation.text(input,"expectedRevision","",64),binding.identity(),epoch);try{if(!playerMatches(player,uuid))throw new IllegalArgumentException("Player name and UUID must match a cached server player");}catch(RuntimeException e){throw e;}catch(Exception e){throw new IllegalStateException("Cached player identity check failed",e);}};identityGuard.run();Map<String,Object> result=new AdvancedBanIntegration(binding).mutate(input,actor.name(),identityGuard);if(result.get("punishment") instanceof Map<?,?> row)punishmentRevisions.issue(actor.id(),String.valueOf(row.get("revision")),binding.identity(),epoch);yield result;}
                 default->throw new IllegalArgumentException("This integration is read-only");
             };
         }
@@ -98,7 +114,7 @@ public final class IntegrationService implements AutoCloseable {
     private void authorize(Auth.Session actor,boolean write,long epoch){authorizeSession(actor,write);if(!enabled.get()||lifecycle.get()!=epoch)throw new IllegalStateException("Integrations module was disabled or restarted");}
     private void authorizeSession(Auth.Session actor,boolean write){if(closed.get())throw new IllegalStateException("Integrations are stopped");if(actor==null||!(write?actor.role().equals("Owner"):Set.of("Owner","Admin").contains(actor.role()))||!authority.test(actor,write))throw new SecurityException(write?"An active Owner session is required":"An active administrator session is required");}
     private static Map<String,Object> copy(Map<String,Object> body){if(body==null||body.size()>20)throw new IllegalArgumentException("Invalid integration request");Map<String,Object> copy=new LinkedHashMap<>(body);if(copy.get("contexts") instanceof Map<?,?> contexts)copy.put("contexts",Map.copyOf(contexts));return Collections.unmodifiableMap(copy);}
-    private static List<String> capabilities(Binding b){if(!b.unavailable().isEmpty())return List.of();return switch(b.id()){case "luckperms"->List.of("groups","loaded-users","user-lookup","nodes","inheritance","edit","create-group");case "coreprotect"->List.of("lookup","player-filter","block-filter","time-filter","pagination");case "advancedban"->List.of("player-punishments","issue","revoke");case "grim"->List.of("player-checks");default->List.of();};}
+    private static List<String> capabilities(Binding b){if(!b.unavailable().isEmpty())return List.of();return switch(b.id()){case "luckperms"->List.of("groups","loaded-users","user-lookup","nodes","inheritance","edit","create-group");case "coreprotect"->List.of("lookup","player-filter","block-filter","time-filter","pagination");case "advancedban"->AdvancedBanIntegration.supportsHistory(b)?List.of("player-punishments","history","pagination","cached-players","issue","revoke"):List.of("player-punishments","cached-players","issue","revoke");case "grim"->List.of("player-checks");default->List.of();};}
     private interface EpochOperation<T>{T call(long epoch)throws Exception;}
     private <T> CompletableFuture<T> submit(EpochOperation<T> operation){
         long epoch=lifecycle.get();
@@ -106,7 +122,7 @@ public final class IntegrationService implements AutoCloseable {
         if(closed.get()||!enabled.get()){result.completeExceptionally(new IllegalStateException("Integrations are stopped or disabled"));return result;}pending.add(result);result.whenComplete((v,e)->pending.remove(result));
         try{workers.execute(()->{if(!phase.compareAndSet(0,1))return;try{if(closed.get()||!enabled.get()||lifecycle.get()!=epoch)throw new IllegalStateException("Integrations are stopped or disabled");T value=operation.call(epoch);if(closed.get()||!enabled.get()||lifecycle.get()!=epoch)throw new IllegalStateException("Integration lifecycle changed; refresh before retrying");result.complete(value);}catch(Throwable e){result.completeExceptionally(e);}});}catch(RejectedExecutionException e){result.completeExceptionally(new IllegalStateException("Integration queue is full; retry later"));}return result;
     }
-    @Override public void close(){closed.set(true);if(presence!=null)presence.close();workers.shutdownNow();for(CompletableFuture<?> f:pending)f.cancel(false);try{workers.awaitTermination(1500,TimeUnit.MILLISECONDS);}catch(InterruptedException e){Thread.currentThread().interrupt();}}
+    @Override public void close(){closed.set(true);punishmentRevisions.clear();if(presence!=null)presence.close();workers.shutdownNow();for(CompletableFuture<?> f:pending)f.cancel(false);try{workers.awaitTermination(1500,TimeUnit.MILLISECONDS);}catch(InterruptedException e){Thread.currentThread().interrupt();}}
     private static final class BukkitRuntime implements Runtime {
         private final MainThread main;
         private volatile List<Map<String,Object>> permissionCache=List.of();
@@ -175,6 +191,9 @@ public final class IntegrationService implements AutoCloseable {
                 catch(Exception e){throw new IllegalStateException("Cached player identity lookup failed",e);}
             }
             return player!=null&&player.getUniqueId().equals(uuid);
+        });}
+        public List<Map<String,Object>> onlinePlayers()throws Exception{return main.await(()->{
+            List<Map<String,Object>> out=new ArrayList<>();for(org.bukkit.entity.Player player:Bukkit.getOnlinePlayers()){if(out.size()==CachedPlayerDirectory.MAX)break;out.add(Map.of("name",player.getName(),"uuid",player.getUniqueId().toString()));}return List.copyOf(out);
         });}
     }
 }

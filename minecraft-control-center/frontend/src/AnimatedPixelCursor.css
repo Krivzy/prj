@@ -1,0 +1,15 @@
+.mcc-pixel-cursor-layer{position:fixed;inset:0;overflow:hidden;z-index:2147483647;pointer-events:none!important;contain:strict}
+.mcc-pixel-cursor{position:absolute;top:0;left:0;width:32px;height:32px;pointer-events:none!important;user-select:none;contain:layout style;transform:translate3d(-32px,-32px,0)}
+.mcc-pixel-cursor[hidden]{display:none!important}
+.mcc-cursor-image{position:absolute;inset:0;display:none;width:32px;height:32px;overflow:hidden;pointer-events:none}
+.mcc-cursor-image img{display:block;width:32px;max-width:none;pointer-events:none;image-rendering:pixelated;filter:none;opacity:1;animation:none}
+.mcc-pixel-cursor[data-state=arrow] [data-shape=arrow],.mcc-pixel-cursor[data-state=action] [data-shape=action],.mcc-pixel-cursor[data-state=text] [data-shape=text],.mcc-pixel-cursor[data-state=disabled] [data-shape=disabled],.mcc-pixel-cursor[data-state=grab] [data-shape=grab],.mcc-pixel-cursor[data-state=grabbing] [data-shape=grabbing],.mcc-pixel-cursor[data-state=busy] [data-shape=busy]{display:block}
+/* Original eight-frame strip, one Minecraft tick (50ms) per frame. */
+.mcc-pixel-cursor[data-state=busy] [data-shape=busy] img{animation:ce-cursor-busy var(--ce-duration) steps(var(--ce-frames),end) infinite}
+@keyframes ce-cursor-busy{from{transform:translateY(0)}to{transform:translateY(calc(-1 * var(--ce-sheet-height)))}}
+/* The class is added only after a mouse position has been painted. This specificity
+   also overrides disabled/action controls and inline non-important map cursors. */
+@media(any-hover:hover) and (any-pointer:fine) and (prefers-reduced-motion:no-preference) and (forced-colors:none){
+  html:root.mcc-pixel-cursor-active,html:root.mcc-pixel-cursor-active body,html:root.mcc-pixel-cursor-active body *{cursor:none!important}
+}
+@media(prefers-reduced-motion:reduce),(forced-colors:active){.mcc-pixel-cursor{display:none!important}.mcc-cursor-image img{animation:none!important}}

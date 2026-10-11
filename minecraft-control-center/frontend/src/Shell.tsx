@@ -67,7 +67,7 @@ export default function Shell({page, changeLang, profile, logout, children}: {
           </div>
         </header>
         {children}
-        <footer className="workspace-footer"><span>Создано пользователем Krivzy</span><span>Minecraft Control Center <i/> One JAR</span></footer>
+        <footer className="workspace-footer"><span>Разработано Krivzy</span><span>Minecraft Control Center <i/> One JAR</span></footer>
       </div>
     </div>
     {commands && <Modal title={app.t('Куда отправимся?','Where to next?')} close={() => setCommands(false)}>
