@@ -7,6 +7,10 @@ export const pages: {id: Page; ru: string; en: string; group: number}[] = [
   {id:'map', ru:'Карта мира', en:'World map', group:0},
   {id:'mobs', ru:'Мобы', en:'Mobs', group:0},
   {id:'events', ru:'События', en:'Events', group:0},
+  {id:'ores', ru:'Честная игра', en:'Fair play', group:0},
+  {id:'luckperms', ru:'LuckPerms', en:'LuckPerms', group:1},
+  {id:'coreprotect', ru:'CoreProtect', en:'CoreProtect', group:1},
+  {id:'advancedban', ru:'AdvancedBan', en:'AdvancedBan', group:1},
   {id:'console', ru:'Консоль', en:'Console', group:1},
   {id:'chat', ru:'Чат', en:'Chat', group:1},
   {id:'automations', ru:'Автоматизации', en:'Automations', group:1},
@@ -16,9 +20,11 @@ export const pages: {id: Page; ru: string; en: string; group: number}[] = [
   {id:'settings', ru:'Настройки', en:'Settings', group:2},
 ];
 
-export function availablePages(role: string) {
+export function availablePages(role: string, integrations: string[] = []) {
   const lower = role.toLowerCase();
   return pages.filter(item =>
+    !(['luckperms','coreprotect','advancedban'].includes(item.id) && !integrations.includes(item.id)) &&
+    !(['luckperms','coreprotect','advancedban','ores'].includes(item.id) && !['owner','admin'].includes(lower)) &&
     !(['console','plugins','automations'].includes(item.id) && !['owner','admin'].includes(lower)) &&
     !(['chat','audit'].includes(item.id) && lower === 'viewer') &&
     !(item.id === 'backups' && lower !== 'owner'));

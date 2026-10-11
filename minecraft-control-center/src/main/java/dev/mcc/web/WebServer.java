@@ -21,12 +21,14 @@ public final class WebServer implements AutoCloseable {
     private static final Set<String> CONFIRMED=Set.of("player.kick","player.ban","player.ipban","player.ban_ip","player.unban_ip","player.op","player.deop","player.kill","player.clear_inventory","player.remove_item","inventory.set","mob.modify","world.border","console.command","server.settings");
     private final MccPlugin plugin;private final Auth auth;private final Database db;private final MainThread main;private final GameService game;private final Realtime realtime;
     private final Set<String> origins,hosts;private final boolean secureCookie,localDefaultMode;private final RateLimiter rate=new RateLimiter();private Undertow server;
-    private final ThreadPoolExecutor http=new ThreadPoolExecutor(4,4,0,TimeUnit.SECONDS,new ArrayBlockingQueue<>(128),r->{Thread t=new Thread(r,"MCC-HTTP");t.setDaemon(true);return t;});
+    private final ThreadPoolExecutor http=new ThreadPoolExecutor(4,4,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(64),r->{Thread t=new Thread(r,"MCC-HTTP");t.setDaemon(true);return t;});
+    private final DefaultByteBufferPool buffers=new DefaultByteBufferPool(true,16384,32,2);
     private record Request(String fingerprint,CompletableFuture<Object> result,long created){}
     private final ConcurrentHashMap<String,Request> requests=new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String,byte[]> compressedAssets=new ConcurrentHashMap<>();
+    private final ByteCache compressedAssets=new ByteCache(64,4*1024*1024);
     public WebServer(MccPlugin plugin,Auth auth,Database db,MainThread main,GameService game,Realtime realtime,String host,int port,boolean allowLan,String publicOrigin,boolean secureCookie)throws Exception{
         this.plugin=plugin;this.auth=auth;this.db=db;this.main=main;this.game=game;this.realtime=realtime;this.secureCookie=secureCookie;
+        http.allowCoreThreadTimeOut(true);
         InetAddress bind=InetAddress.getByName(host);if(!bind.isLoopbackAddress()&&!allowLan)throw new IllegalArgumentException("Non-loopback bind requires web.allow-lan: true");
         localDefaultMode=bind.isLoopbackAddress()&&!allowLan&&publicOrigin.isBlank();
         if(port<1024||port>65535)throw new IllegalArgumentException("HTTP port must be 1024–65535");
@@ -34,7 +36,7 @@ public final class WebServer implements AutoCloseable {
         if(!publicOrigin.isBlank()){URI uri=URI.create(publicOrigin);if(!Set.of("http","https").contains(uri.getScheme())||uri.getHost()==null||uri.getRawUserInfo()!=null||uri.getRawQuery()!=null||uri.getRawFragment()!=null||!(uri.getPath()==null||uri.getPath().isEmpty()))throw new IllegalArgumentException("web.public-origin must be an origin without path");allowed.add(publicOrigin);}
         if(allowed.isEmpty())throw new IllegalArgumentException("LAN mode requires explicit web.public-origin");origins=Set.copyOf(allowed);Set<String> h=new HashSet<>();allowed.forEach(s->h.add(URI.create(s).getRawAuthority()));hosts=Set.copyOf(h);
         HttpHandler websocket=Handlers.websocket((exchange,channel)->realtime.connect(channel,exchange.getAttachment(SESSION)));
-        server=Undertow.builder().addHttpListener(port,host).setIoThreads(1).setWorkerThreads(4)
+        server=Undertow.builder().addHttpListener(port,host).setIoThreads(1).setWorkerThreads(2).setByteBufferPool(buffers)
             .setServerOption(UndertowOptions.MAX_ENTITY_SIZE,16*1024*1024L).setServerOption(UndertowOptions.MAX_HEADER_SIZE,16384)
             .setServerOption(UndertowOptions.REQUEST_PARSE_TIMEOUT,10000).setServerOption(UndertowOptions.NO_REQUEST_TIMEOUT,65000)
             .setHandler(e->{
@@ -59,6 +61,7 @@ public final class WebServer implements AutoCloseable {
             if(!path.startsWith("/api/")){if(!get)throw new IllegalArgumentException("Invalid path");staticFile(e,path);return;}
             e.getResponseHeaders().put(Headers.CACHE_CONTROL,"no-store");Auth.Session s=session(e);
             if(get&&path.equals("/api/auth/status")){respond(e,200,auth.status(s));return;}
+            if(get&&path.equals("/api/server/health")){respond(e,200,plugin.restart().health());return;}
             if(post&&(path.equals("/api/auth/setup")||path.equals("/api/auth/login"))){
                 if(!rate.allow(ip+":login",8,60000))throw new TooMany();Map<String,Object> body=body(e);
                 String name=Json.text(body,"username",""),password=Json.text(body,"password","");
@@ -92,7 +95,7 @@ public final class WebServer implements AutoCloseable {
             respond(e,response instanceof Map<?,?> map&&Boolean.TRUE.equals(map.get("pending"))?202:200,response);
         }catch(TooMany ex){e.getResponseHeaders().put(Headers.RETRY_AFTER,"60");respond(e,429,Map.of("error","rate_limit","message","Too many requests; retry shortly"));}
         catch(Exception ex){Throwable cause=ex;while((cause instanceof ExecutionException||cause instanceof CompletionException)&&cause.getCause()!=null)cause=cause.getCause();
-            int code=cause.getClass().getSimpleName().equals("RequestTooBigException")?413:cause instanceof SecurityException?403:cause.getClass().getSimpleName().equals("InventoryConflictException")?409:cause instanceof IllegalArgumentException||cause instanceof java.util.zip.ZipException?400:cause instanceof IllegalStateException?503:500;
+            int code=cause.getClass().getSimpleName().equals("RequestTooBigException")?413:cause instanceof SecurityException?403:(cause.getClass().getSimpleName().equals("InventoryConflictException")||cause.getClass().getSimpleName().equals("ProfileConflictException"))?409:cause instanceof IllegalArgumentException||cause instanceof java.util.zip.ZipException?400:cause instanceof IllegalStateException||cause instanceof UnsupportedOperationException?503:500;
             String message=code==500?"Internal MCC error; see server logs":Objects.toString(cause.getMessage(),"Request failed");
             if(code==500)plugin.getLogger().warning("MCC request failed: "+cause.getClass().getSimpleName());respond(e,code,Map.of("error","request_failed","message",message));
         }
@@ -100,6 +103,11 @@ public final class WebServer implements AutoCloseable {
     private Object get(String path,HttpServerExchange e,Auth.Session s)throws Exception{
         return switch(path){
             case "/api/state" -> plugin.state();
+            case "/api/server/runtime" -> {admin(s);yield Map.of("kernel",ServerPlatform.brand(),"minecraftVersion",ServerPlatform.minecraftVersion(),"restart",plugin.restart().status());}
+            case "/api/server/profiles" -> {admin(s);active(s);yield plugin.kernelProfiles().status().get(15,TimeUnit.SECONDS);}
+            case "/api/integrations" -> {admin(s);active(s);yield plugin.integrations().discover(s).get(15,TimeUnit.SECONDS);}
+            case "/api/punishments/provider" -> {moderator(s);active(s);yield Map.of("provider",plugin.integrations().punishmentProvider().get(15,TimeUnit.SECONDS));}
+            case "/api/ore-monitor" -> {admin(s);active(s);yield plugin.oreMonitor().snapshot();}
             case "/api/players" -> main.await(game::players);
             case "/api/worlds" -> {List<Map<String,Object>> worlds=main.await(game::worlds);if(!Set.of("Owner","Admin").contains(s.role())){List<Map<String,Object>> filtered=new ArrayList<>();for(Map<String,Object> w:worlds){Map<String,Object> c=new LinkedHashMap<>(w);c.remove("seed");filtered.add(c);}yield filtered;}yield worlds;}
             case "/api/catalogs" -> main.await(game::catalogs);
@@ -126,19 +134,23 @@ public final class WebServer implements AutoCloseable {
                 if(path.startsWith("/api/automations/runs/")){admin(s);active(s);String id=path.substring("/api/automations/runs/".length());UUID.fromString(id);yield plugin.automation().runStatus(id);}
                 if(path.startsWith("/api/automations/")&&path.endsWith("/runs")){admin(s);active(s);String id=path.substring("/api/automations/".length(),path.length()-"/runs".length());UUID.fromString(id);yield plugin.automation().history(id,Integer.parseInt(query(e,"limit","10")));}
                 if(path.startsWith("/api/automations/")&&path.endsWith("/export")){admin(s);String id=path.substring("/api/automations/".length(),path.length()-"/export".length());UUID.fromString(id);yield plugin.automation().exportLegacy(id);}
-                if(path.startsWith("/api/actions/")){String id=path.substring(13);UUID.fromString(id);Request request=requests.get(s.name()+":"+id);if(request==null)throw new IllegalArgumentException("Unknown action ID");if(!request.result().isDone())yield pending(id);yield request.result().get();}if(path.startsWith("/api/players/")){String part=path.substring(13);if(part.endsWith("/inventory")){moderator(s);String uuid=part.substring(0,part.length()-10);yield main.await(()->game.inventory(uuid,query(e,"kind","main")));}UUID.fromString(part);yield main.await(()->game.player(part));}throw new IllegalArgumentException("Unknown endpoint");}
+                if(path.startsWith("/api/actions/")){String id=path.substring(13);UUID.fromString(id);Request request=requests.get(s.id()+":"+id);if(request==null)throw new IllegalArgumentException("Unknown action ID");if(!request.result().isDone())yield pending(id);yield request.result().get();}if(path.startsWith("/api/players/")){String part=path.substring(13);if(part.endsWith("/inventory")){moderator(s);String uuid=part.substring(0,part.length()-10);yield main.await(()->game.inventory(uuid,query(e,"kind","main")));}UUID.fromString(part);yield main.await(()->game.player(part));}throw new IllegalArgumentException("Unknown endpoint");}
         };
     }
     @SuppressWarnings("unchecked") private Object post(String path,Map<String,Object> body,Auth.Session s)throws Exception{
         return switch(path){
             case "/api/action" -> action(body,s);
-            case "/api/punishments" -> {moderator(s);Map<String,Object> values=punishmentBody(body);if(Set.of("ban","kick").contains(Json.text(values,"type","").toLowerCase(Locale.ROOT))&&!Boolean.TRUE.equals(body.get("confirmed")))throw new IllegalArgumentException("Explicit confirmation required");yield tracked("punishment.create",body,s,()->plugin.punishments().create(values,s.name()).thenApply(value->value));}
+            case "/api/server/restart" -> {owner(s);active(s);if(!Boolean.TRUE.equals(body.get("confirmed")))throw new IllegalArgumentException("Explicit restart confirmation required");String id=Json.text(body,"id","");UUID.fromString(id);db.audit(s.name(),"server.restart.requested","ok",Map.of("id",id,"method","normal-stop-and-start")).get();yield plugin.restart().request(id,()->{active(s);owner(s);});}
+            case "/api/server/profiles/plan" -> {owner(s);active(s);yield plugin.kernelProfiles().plan(profileActor(s),Json.text(body,"profile",""),()->auth.session(s.id())==s&&s.role().equals("Owner")).get(15,TimeUnit.SECONDS);}
+            case "/api/server/profiles/apply" -> {owner(s);active(s);yield tracked("server.profiles.apply",body,s,()->plugin.kernelProfiles().apply(profileActor(s),Json.text(body,"planId",""),Boolean.TRUE.equals(body.get("confirmed")),()->auth.session(s.id())==s&&s.role().equals("Owner")).thenApply(v->v));}
+            case "/api/punishments" -> {moderator(s);builtinModeration();Map<String,Object> values=punishmentBody(body);if(Set.of("ban","kick").contains(Json.text(values,"type","").toLowerCase(Locale.ROOT))&&!Boolean.TRUE.equals(body.get("confirmed")))throw new IllegalArgumentException("Explicit confirmation required");yield tracked("punishment.create",body,s,()->plugin.punishments().create(values,s.name()).thenApply(value->value));}
             case "/api/automations" -> {admin(s);active(s);Map<String,Object> saved=plugin.automation().save(body,s.name(),s.role());db.audit(s.name(),"automation.save","ok",Map.of("id",saved.get("id")));yield saved;}
             case "/api/backups" -> {owner(s);if(plugin.backup().list().size()>=20)throw new IllegalStateException("Backup limit reached; archive old backups offline");Object backup=plugin.backup().create();db.audit(s.name(),"backup.create","ok",Map.of("scope","MCC data"));yield backup;}
             case "/api/settings" -> {admin(s);Object result=plugin.updateSettings(body);db.audit(s.name(),"settings.update","ok",Map.of());yield result;}
             case "/api/users" -> {owner(s);String name=Json.text(body,"username","");auth.createUser(s,name,Json.text(body,"password",""),Json.text(body,"role","Viewer"));db.audit(s.name(),"users.create","ok",Map.of("username",name,"role",Json.text(body,"role","Viewer")));yield Map.of("ok",true);}
             case "/api/plugins/catalog/install" -> {owner(s);active(s);if(!Boolean.TRUE.equals(body.get("confirmed")))throw new IllegalArgumentException("Explicit confirmation required");yield tracked("plugins.catalog.install",body,s,()->{active(s);if(!rate.allow(s.name()+":plugin-install",5,60000))throw new TooMany();return plugin.pluginCatalog().install(Json.text(body,"planId",""),s.name(),()->auth.session(s.id())==s&&s.role().equals("Owner")).thenApply(value->value);});}
             default -> {
+                if(path.startsWith("/api/integrations/")){String[] parts=path.substring("/api/integrations/".length()).split("/",-1);if(parts.length!=2||!Set.of("luckperms","coreprotect","advancedban","grim").contains(parts[0]))throw new IllegalArgumentException("Unknown integration route");admin(s);active(s);if(parts[1].equals("query"))yield tracked("integration."+parts[0]+".query",body,s,()->plugin.integrations().query(s,parts[0],body).thenApply(v->v));if(parts[1].equals("mutate")){owner(s);yield tracked("integration."+parts[0]+".mutate",body,s,()->plugin.integrations().mutate(s,parts[0],body).thenApply(v->v));}throw new IllegalArgumentException("Unknown integration operation");}
                 if(path.startsWith("/api/automations/")&&path.endsWith("/run")){
                     admin(s);active(s);String ruleId=path.substring("/api/automations/".length(),path.length()-"/run".length());UUID.fromString(ruleId);
                     Object rawContext=body.getOrDefault("context",Map.of());if(!(rawContext instanceof Map<?,?>))throw new IllegalArgumentException("Run context must be an object");
@@ -149,6 +161,7 @@ public final class WebServer implements AutoCloseable {
         };
     }
     @SuppressWarnings("unchecked") private Object action(Map<String,Object> body,Auth.Session s)throws Exception{
+        active(s);
         String id=Json.text(body,"id","");UUID.fromString(id);String action=Json.text(body,"action","");if(action.length()>64)throw new IllegalArgumentException("Invalid action");
         if(s.role().equals("Viewer")||(s.role().equals("Moderator")&&!MOD_ACTIONS.contains(action)))throw new SecurityException("Role does not allow this action");
         if(Set.of("console.command","player.op","player.deop","player.ipban","player.ban_ip","player.unban_ip","server.settings").contains(action))owner(s);
@@ -159,7 +172,7 @@ public final class WebServer implements AutoCloseable {
         if(action.startsWith("chat.")&&!plugin.module("chat"))throw new IllegalStateException("Chat module is disabled");
         if(!rate.allow(s.name()+":action",120,60000))throw new TooMany();
         long now=System.currentTimeMillis();requests.entrySet().removeIf(e->now-e.getValue().created()>600000&&e.getValue().result().isDone());if(requests.size()>=1024)throw new IllegalStateException("Action deduplication queue full");
-        String key=s.name()+":"+id,fingerprint=Json.write(Map.of("action",action,"params",params));Request fresh=new Request(fingerprint,new CompletableFuture<>(),now);Request old=requests.putIfAbsent(key,fresh);
+        String key=s.id()+":"+id,fingerprint=Json.write(Map.of("action",action,"params",params));Request fresh=new Request(fingerprint,new CompletableFuture<>(),now);Request old=requests.putIfAbsent(key,fresh);
         if(old!=null){if(!old.fingerprint().equals(fingerprint))throw new IllegalArgumentException("Action ID was reused with different parameters");if(!old.result().isDone())return pending(id);return old.result().get();}
         try{
             if(action.equals("server.settings")&&params.containsKey("whitelist"))plugin.backupServerProperties();
@@ -167,7 +180,7 @@ public final class WebServer implements AutoCloseable {
                 moderation(action,params,s).whenComplete((actual,error)->{if(error!=null)fresh.result().completeExceptionally(error);else db.audit(s.name(),action,"ok",redact(params)).whenComplete((unused,auditError)->{if(auditError!=null)fresh.result().completeExceptionally(new IllegalStateException("Punishment applied; audit is unavailable"));else fresh.result().complete(Map.of("ok",true,"result",actual,"sequence",realtime.sequence()));plugin.refreshSoon();});});
                 try{return fresh.result().get(8,TimeUnit.SECONDS);}catch(TimeoutException timeout){return pending(id);}
             }
-            Object actual=main.await(()->game.execute(action,params));Map<String,Object> response=Map.of("ok",true,"result",actual,"sequence",realtime.sequence());
+            Object actual=main.await(()->{active(s);return game.execute(action,params);});Map<String,Object> response=Map.of("ok",true,"result",actual,"sequence",realtime.sequence());
             db.audit(s.name(),action,"ok",redact(params)).get();realtime.publish("timeline",Map.of("time",now,"actor",s.name(),"action",action,"status","ok"));plugin.refreshSoon();fresh.result().complete(response);return response;
         }catch(MainThread.PendingOperation pending){pending.future().whenComplete((actual,error)->{
             if(error!=null){db.audit(s.name(),action,"error",Map.of("message","Action failed"));fresh.result().completeExceptionally(error);}
@@ -182,7 +195,7 @@ public final class WebServer implements AutoCloseable {
         String name=Json.text(values,"username",session.name());if(name.isBlank())name=session.name();Auth.validateUsername(name);
         String destination=name;
         Auth.Session changed=auth.changeAccount(session,Json.text(values,"currentPassword",""),destination,Json.text(values,"password",""));
-        requests.keySet().removeIf(key->key.startsWith(session.name()+":")||key.startsWith(destination+":"));return changed;
+        requests.keySet().removeIf(key->key.startsWith(session.id()+":"));return changed;
     }
     /** A stale editor client cannot reach any world mutation or chunk-detail worker. */
     static boolean retiredMapEndpoint(String path){return path.equals("/api/build")||path.startsWith("/api/build/")||Set.of("/api/map","/api/map/terrain","/api/map/index","/api/map/detail","/api/map/region").contains(path);}
@@ -192,14 +205,16 @@ public final class WebServer implements AutoCloseable {
         Map<String,Object> target=main.await(()->game.player(uuid));values.put("targetName",target.get("name"));return values;
     }
     private CompletableFuture<Object> moderation(String action,Map<String,Object> params,Auth.Session s)throws Exception{
+        builtinModeration();
         String uuid=Json.text(params,"uuid","");UUID id=dev.mcc.game.PunishmentEngine.uuid(uuid);
         if(action.equals("player.unmute")||action.equals("player.unban"))return plugin.punishments().revokeType(id,action.endsWith("unmute")?"mute":"ban",s.name()).thenApply(value->value);
         Map<String,Object> values=punishmentBody(params);values.put("type",action.substring("player.".length()));return plugin.punishments().create(values,s.name()).thenApply(value->value);
     }
+    private void builtinModeration(){if(plugin.integrations().externalPunishments().getAsBoolean())throw new IllegalStateException("Наказаниями управляет AdvancedBan. Откройте вкладку AdvancedBan; встроенные наказания MCC отключены.");}
     private Object tracked(String operation,Map<String,Object> body,Auth.Session s,Supplier<CompletableFuture<Object>> start)throws Exception{
         String id=Json.text(body,"id",UUID.randomUUID().toString());UUID.fromString(id);long now=System.currentTimeMillis();
         requests.entrySet().removeIf(entry->now-entry.getValue().created()>600000&&entry.getValue().result().isDone());if(requests.size()>=1024)throw new IllegalStateException("Action queue is full");
-        String fingerprint=Json.write(Map.of("operation",operation,"body",body));Request fresh=new Request(fingerprint,new CompletableFuture<>(),now),existing=requests.putIfAbsent(s.name()+":"+id,fresh);Request request=existing==null?fresh:existing;
+        String fingerprint=Json.write(Map.of("operation",operation,"body",body));Request fresh=new Request(fingerprint,new CompletableFuture<>(),now),existing=requests.putIfAbsent(s.id()+":"+id,fresh);Request request=existing==null?fresh:existing;
         if(existing!=null&&!existing.fingerprint().equals(fingerprint))throw new IllegalArgumentException("Action ID was reused with different parameters");
         if(existing==null)try{start.get().whenComplete((value,error)->{if(error!=null)fresh.result().completeExceptionally(error);else{db.audit(s.name(),operation,"ok",redact(body));fresh.result().complete(value);plugin.refreshSoon();}});}catch(Exception error){fresh.result().completeExceptionally(error);throw error;}
         try{return request.result().get(8,TimeUnit.SECONDS);}catch(TimeoutException error){return pending(id);}
@@ -213,6 +228,7 @@ public final class WebServer implements AutoCloseable {
     }
     private Auth.Session session(HttpServerExchange e){var cookie=e.getRequestCookie("MCC_SESSION");return auth.session(cookie==null?null:cookie.getValue());}
     private void cookie(HttpServerExchange e,String id,int maxAge){e.setResponseCookie(new CookieImpl("MCC_SESSION",id).setHttpOnly(true).setSecure(secureCookie).setSameSiteMode("Strict").setPath("/").setMaxAge(maxAge));}
+    static String profileActor(Auth.Session s){try{return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(s.id().getBytes(java.nio.charset.StandardCharsets.UTF_8)));}catch(java.security.NoSuchAlgorithmException impossible){throw new IllegalStateException(impossible);}}
     private static void owner(Auth.Session s){if(!s.role().equals("Owner"))throw new SecurityException("Owner permission required");}
     private static void admin(Auth.Session s){if(!Set.of("Owner","Admin").contains(s.role()))throw new SecurityException("Admin permission required");}
     private static void moderator(Auth.Session s){if(s.role().equals("Viewer"))throw new SecurityException("Moderator permission required");}
@@ -231,12 +247,13 @@ public final class WebServer implements AutoCloseable {
             String acceptEncoding=e.getRequestHeaders().getFirst(Headers.ACCEPT_ENCODING);
             if(textual&&bytes.length>1024&&acceptEncoding!=null&&Arrays.stream(acceptEncoding.split(",")).anyMatch(v->v.strip().equals("gzip"))){
                 byte[] compressed=compressedAssets.get(name);
-                if(compressed==null){ByteArrayOutputStream buffer=new ByteArrayOutputStream();try(java.util.zip.GZIPOutputStream gzip=new java.util.zip.GZIPOutputStream(buffer)){gzip.write(bytes);}compressed=buffer.toByteArray();if(compressedAssets.size()<64)compressedAssets.putIfAbsent(name,compressed);}
+                if(compressed==null){ByteArrayOutputStream buffer=new ByteArrayOutputStream();try(java.util.zip.GZIPOutputStream gzip=new java.util.zip.GZIPOutputStream(buffer)){gzip.write(bytes);}compressed=buffer.toByteArray();compressedAssets.put(name,compressed);}
                 e.getResponseHeaders().put(Headers.CONTENT_ENCODING,"gzip").put(Headers.VARY,"Accept-Encoding");bytes=compressed;
             }
             e.getResponseSender().send(java.nio.ByteBuffer.wrap(bytes));
         }
     }
     private static final class TooMany extends RuntimeException{}
-    @Override public void close(){if(server!=null)server.stop();http.shutdownNow();}
+    public Map<String,Object> stats(){return Map.of("httpThreads",http.getPoolSize(),"httpQueue",http.getQueue().size(),"compressedAssetBytes",compressedAssets.bytes(),"compressedAssetBudgetBytes",4*1024*1024,"pooledDirectBufferBudgetBytes",32*16384);}
+    @Override public void close(){if(server!=null)server.stop();http.shutdownNow();compressedAssets.clear();buffers.close();}
 }

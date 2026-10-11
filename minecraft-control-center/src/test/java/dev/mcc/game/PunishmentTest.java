@@ -11,6 +11,47 @@ import java.util.concurrent.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PunishmentTest {
+    @Test void externalProviderSuppressesEnforcementAndMutationWithoutRemovingHistoriesOrBans() throws Exception {
+        Path file=directory.resolve("external.db");Time clock=new Time();Game game=new Game(file);long ban;
+        try(Database db=new Database(file);PunishmentEngine engine=engine(db,game,clock)) {
+            await(engine.start());ban=((Number)await(engine.create(body("ban",1),"owner")).get("id")).longValue();await(engine.create(body("mute",0),"owner"));
+            engine.externalManaged(()->true);assertFalse(engine.muted(PLAYER));assertNull(engine.activeBan(PLAYER));
+            assertThrows(ExecutionException.class,()->await(engine.create(body("warn",0),"owner")));assertThrows(ExecutionException.class,()->await(engine.revoke(ban,"owner")));
+            clock.now+=2000;await(engine.pulse());assertTrue(game.removed.isEmpty());assertEquals("MCCPunishment:"+ban,game.bans.get(PLAYER));assertEquals(2,await(engine.list(PLAYER,20)).size());
+        }
+        Game restarted=new Game(file,game.bans);
+        try(Database db=new Database(file);PunishmentEngine engine=engine(db,restarted,clock)) {
+            engine.externalManaged(()->true);await(engine.start());assertTrue(restarted.applied.isEmpty());assertTrue(restarted.removed.isEmpty());assertEquals(2,await(engine.list(PLAYER,20)).size());
+            engine.externalManaged(()->false);await(engine.pulse());assertNull(restarted.bans.get(PLAYER));assertTrue(engine.muted(PLAYER));
+        }
+    }
+    @Test void providerActivationWhileDatabaseRequestIsQueuedCannotPublishNativePunishment() throws Exception {
+        Path file=directory.resolve("queued-external.db");Time clock=new Time();Game game=new Game(file);var managed=new java.util.concurrent.atomic.AtomicBoolean();
+        try(Database db=new Database(file);PunishmentEngine engine=engine(db,game,clock)) {
+            engine.externalManaged(managed::get);await(engine.start());var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+            var blocker=db.submit(connection->{entered.countDown();if(!release.await(5,TimeUnit.SECONDS))throw new IllegalStateException("Test barrier timeout");return null;});
+            assertTrue(entered.await(5,TimeUnit.SECONDS));var pending=engine.create(body("ban",0),"owner");managed.set(true);release.countDown();await(blocker);
+            assertThrows(ExecutionException.class,()->await(pending));assertTrue(game.applied.isEmpty());assertTrue(game.bans.isEmpty());
+            assertEquals("failed",await(engine.list(PLAYER,10)).getFirst().get("status"));
+        }
+    }
+    @Test void providerFailureIsFailClosedAndDoesNotErasePreviouslyStoredPunishments() throws Exception {
+        Path file=directory.resolve("broken-external.db");Time clock=new Time();Game game=new Game(file);
+        try(Database db=new Database(file);PunishmentEngine engine=engine(db,game,clock)) {
+            await(engine.start());await(engine.create(body("mute",0),"owner"));engine.externalManaged(()->{throw new IllegalStateException("Bridge closed");});
+            assertFalse(engine.muted(PLAYER));assertThrows(ExecutionException.class,()->await(engine.create(body("kick",0),"owner")));await(engine.pulse());assertEquals(1,await(engine.list(PLAYER,10)).size());
+        }
+    }
+    @Test void shutdownWhileDatabaseRequestIsQueuedCannotApplyNewNativeBan() throws Exception {
+        Path file=directory.resolve("queued-shutdown.db");Time clock=new Time();Game game=new Game(file);
+        try(Database db=new Database(file);PunishmentEngine engine=engine(db,game,clock)) {
+            await(engine.start());var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+            var blocker=db.submit(connection->{entered.countDown();if(!release.await(5,TimeUnit.SECONDS))throw new IllegalStateException("Test barrier timeout");return null;});
+            assertTrue(entered.await(5,TimeUnit.SECONDS));var pending=engine.create(body("ban",0),"owner");engine.close();release.countDown();await(blocker);
+            assertThrows(ExecutionException.class,()->await(pending));assertTrue(game.applied.isEmpty());assertTrue(game.bans.isEmpty());
+            assertEquals("failed",await(engine.list(PLAYER,10)).getFirst().get("status"));
+        }
+    }
     @TempDir Path directory;
     private static final UUID PLAYER=UUID.fromString("0cd877f0-a5ef-3457-9666-52728b2dc04c");
     private static Map<String,Object> body(String type,long seconds){return Map.of("uuid",PLAYER.toString(),"type",type,"seconds",seconds,"reason","Test reason","targetName","TestPlayer");}

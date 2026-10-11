@@ -1,6 +1,7 @@
 package dev.mcc.game;
 
 import org.bukkit.*;
+import dev.mcc.core.ServerPlatform;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
@@ -68,15 +69,15 @@ final class WorldTerrainEngine implements AutoCloseable {
     private void tick(){
         long deadline=System.nanoTime()+1_000_000,now=System.currentTimeMillis();
         Parsed p;for(int i=0;i<4&&(p=parsed.poll())!=null;i++){if(p.epoch!=epoch||!enabled)continue;Cached current=cache.get(p.key);if(current==null||!Objects.equals(current.dto.get("sampledAt"),p.sampledAt))continue;put(p.key,p.error==null?p.dto:placeholder(p.key,"error","Не удалось прочитать снимок"),p.error==null?120_000:5_000);}
-        Prepared preflight;for(int i=0;Bukkit.getTPS()[0]>=18&&i<MAX_LOADS&&System.nanoTime()<deadline&&(preflight=prepared.poll())!=null;i++) {
+        Prepared preflight;for(int i=0;!ServerPlatform.lowTps()&&i<MAX_LOADS&&System.nanoTime()<deadline&&(preflight=prepared.poll())!=null;i++) {
             if(preflight.epoch!=epoch||!enabled)continue;Node node=preflight.node;
             if(preflight.error!=null){loads--;retry(node,preflight.error);continue;}
             if(!pending.containsKey(node.key)||Bukkit.getWorld(node.key.world)!=node.world){loads--;pending.remove(node.key);continue;}
-            try{if(!SavedChunkStatus.loadOnlyFull(preflight.state,()->node.world.getChunkAtAsync(node.key.x,node.key.z,false,false).whenComplete((chunk,error)->retainLoaded(node,chunk,error)))){loads--;missing(node,"Чанк не сохранён полностью");}}
+            try{if(!SavedChunkStatus.loadOnlyFull(preflight.state,()->ServerPlatform.asyncExistingChunk(node.world,node.key.x,node.key.z).whenComplete((chunk,error)->retainLoaded(node,chunk,error)))){loads--;missing(node,"Чанк не сохранён полностью");}}
             catch(RuntimeException ex){loads--;retry(node,ex);}
         }
         int admissionRounds=queued.size();
-        if(Bukkit.getTPS()[0]>=18)while(loads<MAX_LOADS&&!queued.isEmpty()&&admissionRounds-->0&&System.nanoTime()<deadline){Node node=queued.removeFirst();if(!pending.containsKey(node.key))continue;if(now-node.requestedAt>10_000){pending.remove(node.key);continue;}
+        if(!ServerPlatform.lowTps())while(loads<MAX_LOADS&&!queued.isEmpty()&&admissionRounds-->0&&System.nanoTime()<deadline){Node node=queued.removeFirst();if(!pending.containsKey(node.key))continue;if(now-node.requestedAt>10_000){pending.remove(node.key);continue;}
             if(Bukkit.getWorld(node.key.world)!=node.world){retry(node,new IllegalStateException("Мир выгружен"));continue;}
             loads++;try{worker.execute(()->{try{prepared.add(new Prepared(node,SavedChunkStatus.read(node.folder,node.dimension,node.key.x,node.key.z),null,node.epoch));}catch(Exception ex){prepared.add(new Prepared(node,null,ex,node.epoch));}});}catch(RejectedExecutionException ex){prepared.add(new Prepared(node,null,new CapacityException(),node.epoch));}}
         if(pending.isEmpty()&&parsed.isEmpty()&&prepared.isEmpty()&&worker.getActiveCount()==0&&worker.getQueue().isEmpty()){task.cancel();task=null;}
@@ -96,8 +97,8 @@ final class WorldTerrainEngine implements AutoCloseable {
         try{
             if(!chunk.isLoaded()){retry(node,new IllegalStateException("Чанк выгрузился; повторите запрос"));return;}
             if(!chunk.isGenerated()){missing(node,"Чанк ещё не сформирован");return;}
-            int tick=Bukkit.getCurrentTick();if(!canSnapshot(tick,lastSnapshotTick,Bukkit.getTPS()[0])){retry(node,new CapacityException());return;}
-            lastSnapshotTick=tick;long begin=System.nanoTime();ChunkSnapshot snapshot=chunk.getChunkSnapshot(true,false,false,false);lastSnapshotNanos=System.nanoTime()-begin;
+            int tick=(int)ServerPlatform.currentTick();double[] rates=ServerPlatform.tps();if(!canSnapshot(tick,lastSnapshotTick,rates.length>0?rates[0]:Double.NaN)){retry(node,new CapacityException());return;}
+            lastSnapshotTick=tick;long begin=System.nanoTime();ChunkSnapshot snapshot=chunk.getChunkSnapshot(true,false,false);lastSnapshotNanos=System.nanoTime()-begin;
             int minY=node.world.getMinHeight(),maxY=node.world.getMaxHeight();long sampledAt=System.currentTimeMillis();put(node.key,map("cx",node.key.x,"cz",node.key.z,"status","processing","sampledAt",sampledAt),30_000);
             worker.execute(()->{try{parsed.add(new Parsed(node.key,sample(snapshot,node.key.x,node.key.z,minY,maxY,sampledAt),null,node.epoch,sampledAt));}catch(Throwable ex){parsed.add(new Parsed(node.key,null,ex,node.epoch,sampledAt));}});
         }catch(RejectedExecutionException ex){retry(node,new CapacityException());}catch(RuntimeException ex){retry(node,ex);}

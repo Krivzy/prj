@@ -1,6 +1,7 @@
 package dev.mcc.game;
 
 import org.bukkit.*;
+import dev.mcc.core.ServerPlatform;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 import java.io.IOException;
@@ -15,7 +16,7 @@ public final class MapEngine implements AutoCloseable {
     private BukkitTask heartbeat;
     public MapEngine(JavaPlugin plugin){this.plugin=plugin;images=new SavedImageMap(plugin.getDataFolder().toPath().resolve("map-images/v1"));}
     public void enabled(boolean value){requireMainThread();images.enabled(value);if(value){capture();if(heartbeat==null)heartbeat=Bukkit.getScheduler().runTaskTimer(plugin,this::capture,20,20);}else if(heartbeat!=null){heartbeat.cancel();heartbeat=null;}}
-    private void capture(){requireMainThread();images.paused(Bukkit.getTPS()[0]<18||Bukkit.getAverageTickTime()>45);for(World w:Bukkit.getWorlds()){Location p=w.getSpawnLocation();String dimension=switch(w.getEnvironment()){case NETHER->"the_nether";case THE_END->"the_end";default->"overworld";};images.register(new SavedImageMap.WorldInfo(w.getName(),w.getUID(),w.getWorldFolder().toPath(),dimension,w.getMinHeight(),w.getMaxHeight(),map("x",p.getX(),"y",p.getY(),"z",p.getZ())));}}
+    private void capture(){requireMainThread();images.paused(ServerPlatform.performanceGuard());for(World w:Bukkit.getWorlds()){Location p=w.getSpawnLocation();String dimension=switch(w.getEnvironment()){case NETHER->"the_nether";case THE_END->"the_end";default->"overworld";};images.register(new SavedImageMap.WorldInfo(w.getName(),w.getUID(),w.getWorldFolder().toPath(),dimension,w.getMinHeight(),w.getMaxHeight(),map("x",p.getX(),"y",p.getY(),"z",p.getZ())));}}
     public Map<String,Object> manifest(String name){return images.manifest(name);}
     public SavedImageMap.Tile image(String name,int level,int x,int y)throws IOException{return images.tile(name,level,x,y);}
     public Map<String,Object> players(String name){requireMainThread();World w=Bukkit.getWorld(name);if(w==null)throw new IllegalArgumentException("Мир не загружен");List<Map<String,Object>> players=new ArrayList<>();for(var player:w.getPlayers()){Location p=player.getLocation();players.add(map("uuid",player.getUniqueId().toString(),"name",player.getName(),"x",p.getX(),"y",p.getY(),"z",p.getZ()));}return map("world",name,"worldId",w.getUID().toString(),"players",players,"timestamp",System.currentTimeMillis());}

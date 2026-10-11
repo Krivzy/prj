@@ -4,12 +4,15 @@ import java.nio.file.*;
 import java.security.MessageDigest;
 import java.sql.*;
 import java.util.HexFormat;
+import java.util.HashSet;
+import java.util.Set;
 
 /** Explicit offline migration of a single existing local owner; never invoked by normal plugin startup. */
 class MigrateLocalAdmin {
     static String sha(Path p) throws Exception {return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(p)));}
     public static void main(String[] args) throws Exception {
-        if(args.length!=4||!args[0].equals("--confirmed-offline"))throw new IllegalArgumentException("Usage: java -cp MinecraftControlCenter.jar Migrate-Local-Admin.java --confirmed-offline database closed-backup expected-sha256");
+        boolean merge=args.length==5&&args[4].equals("--merge-existing-admin");
+        if((args.length!=4&&!merge)||!args[0].equals("--confirmed-offline"))throw new IllegalArgumentException("Usage: java -cp MinecraftControlCenter.jar Migrate-Local-Admin.java --confirmed-offline database closed-backup expected-sha256 [--merge-existing-admin]");
         Path database=Path.of(args[1]).toAbsolutePath().normalize(),backup=Path.of(args[2]).toAbsolutePath().normalize();String expected=args[3];
         if(!expected.matches("[a-f0-9]{64}")||database.equals(backup)||Files.isSymbolicLink(database)||Files.isSymbolicLink(backup)||!Files.isRegularFile(database)||!Files.isRegularFile(backup)||Files.isSameFile(database,backup))throw new IllegalArgumentException("An existing distinct regular closed backup is required");
         if(!sha(database).equals(expected)||!sha(backup).equals(expected))throw new IllegalStateException("Database or closed backup changed");
@@ -19,10 +22,16 @@ class MigrateLocalAdmin {
         try(Connection c=DriverManager.getConnection("jdbc:sqlite:"+database)){
             c.setAutoCommit(false);
             try{
-                try(Statement s=c.createStatement();ResultSet r=s.executeQuery("SELECT name,role FROM users")){if(!r.next()||!r.getString(1).equals("owner")||!r.getString(2).equals("Owner")||r.next())throw new IllegalStateException("Migration is limited to exactly one owner account; existing users must be reviewed separately");}
-                try(PreparedStatement s=c.prepareStatement("UPDATE users SET name='admin',hash=? WHERE name='owner' AND role='Owner'")){s.setString(1,hash);if(s.executeUpdate()!=1)throw new IllegalStateException("Owner changed concurrently");}
+                Set<String> users=new HashSet<>();
+                try(Statement s=c.createStatement();ResultSet r=s.executeQuery("SELECT name,role FROM users")){while(r.next()){if(!r.getString(2).equals("Owner")||!users.add(r.getString(1)))throw new IllegalStateException("Existing users must be reviewed separately");}}
+                if(!users.equals(merge?Set.of("owner","admin"):Set.of("owner")))throw new IllegalStateException("Migration requires the exact reviewed account set");
+                if(merge){
+                    // Explicitly approved two-Owner case: preserve the existing admin row metadata.
+                    try(PreparedStatement s=c.prepareStatement("UPDATE users SET hash=? WHERE name='admin' AND role='Owner'")){s.setString(1,hash);if(s.executeUpdate()!=1)throw new IllegalStateException("Admin changed concurrently");}
+                    try(Statement s=c.createStatement()){if(s.executeUpdate("DELETE FROM users WHERE name='owner' AND role='Owner'")!=1)throw new IllegalStateException("Owner changed concurrently");}
+                }else try(PreparedStatement s=c.prepareStatement("UPDATE users SET name='admin',hash=? WHERE name='owner' AND role='Owner'")){s.setString(1,hash);if(s.executeUpdate()!=1)throw new IllegalStateException("Owner changed concurrently");}
                 try(Statement s=c.createStatement()){
-                    s.executeUpdate("INSERT INTO documents(namespace,id,json) VALUES('auth-default-account','admin','{\"name\":\"admin\"}')");
+                    s.executeUpdate("INSERT INTO documents(namespace,id,json) VALUES('auth-default-account','admin','{\"name\":\"admin\"}') ON CONFLICT(namespace,id) DO UPDATE SET json=excluded.json");
                     s.executeUpdate("INSERT OR REPLACE INTO documents(namespace,id,json) VALUES('migrations','auth-bootstrap-admin-v1','{\"created\":false,\"explicitLocalMigration\":true}')");
                 }
                 try(PreparedStatement s=c.prepareStatement("INSERT INTO audit(time,actor,action,status,details) VALUES(?,'local-offline-migration','users.bootstrap.migrate','ok','{\"previousUsername\":\"owner\",\"username\":\"admin\"}')")){s.setLong(1,System.currentTimeMillis());s.executeUpdate();}

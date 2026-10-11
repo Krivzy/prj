@@ -21,7 +21,7 @@ export default function Shell({page, changeLang, profile, logout, children}: {
   const [menu, setMenu] = useState(false);
   const [commands, setCommands] = useState(false);
   const [query, setQuery] = useState('');
-  const entries = availablePages(app.auth.user?.role ?? 'Viewer');
+  const entries = availablePages(app.auth.user?.role ?? 'Viewer',app.integrationIds);
   const title = pages.find(item => item.id === page);
   const results = entries.filter(item => item[app.lang].toLowerCase().includes(query.toLowerCase()));
   useEffect(() => {
@@ -41,7 +41,7 @@ export default function Shell({page, changeLang, profile, logout, children}: {
     <div className="app-shell">
       <aside id="workspace-navigation" className={`sidebar ${menu ? 'is-open' : ''}`}>
         <button className="brand-button" onClick={() => navigate('dashboard')} aria-label="Minecraft Control Center"><Brand/></button>
-        <div className="realm-card"><span className="realm-block" aria-hidden="true">▦</span><div><strong>{live.snapshot?.serverName ?? 'Minecraft'}</strong><small>Paper {live.snapshot?.minecraftVersion ?? ''}</small></div><span className={connected ? 'status-dot' : 'offline-dot'}/></div>
+        <div className="realm-card"><span className="realm-block" aria-hidden="true">▦</span><div><strong>{live.snapshot?.serverName ?? 'Minecraft'}</strong><small>{live.snapshot?.serverName ?? 'Minecraft'} {live.snapshot?.minecraftVersion ?? ''}</small></div><span className={connected ? 'status-dot' : 'offline-dot'}/></div>
         <nav aria-label={app.t('Разделы', 'Sections')}>
           {[0,1,2].map(group => <div className="nav-group" key={group}>
             <span className="nav-group-label">{group === 0 ? app.t('Твой сервер','Your server') : group === 1 ? app.t('Управление','Control') : app.t('Система','System')}</span>

@@ -1,0 +1,26 @@
+import {useEffect,useState} from 'react';
+import {post} from './api';
+import {useApp,useResource} from './context';
+import {Button,Icon} from './ui';
+import {Brand} from './Shell';
+import './ServerRestart.css';
+import {parseAcceptedRestart,restartHasCompleted,type AcceptedRestart as Accepted} from './restart-view';
+const KEY='mcc-server-restart';
+export function useServerRestart(){
+  const [restart,setRestart]=useState<Accepted|null>(()=>{try{const v=JSON.parse(sessionStorage.getItem(KEY)??'null');return parseAcceptedRestart(v,Date.now());}catch{return null;}});
+  useEffect(()=>{const received=(event:Event)=>{const v=parseAcceptedRestart((event as CustomEvent).detail,Date.now());if(v){try{sessionStorage.setItem(KEY,JSON.stringify(v));}catch{/* Storage can be disabled; the current restart still needs its screen. */}setRestart(v);}};window.addEventListener('mcc-server-restart',received);return()=>window.removeEventListener('mcc-server-restart',received);},[]);
+  return {restart,clear:()=>{try{sessionStorage.removeItem(KEY);}catch{/* The in-memory state is authoritative for this tab. */}setRestart(null);}};
+}
+export function RestartControl(){
+  const app=useApp();const runtime=useResource<{restart:{available:boolean;message:string;bootId:string}}>('/api/server/runtime');const [busy,setBusy]=useState(false);
+  async function restart(){if(busy||!app.owner)return;if(!await app.confirm(app.t('Перезапустить сервер? Миры будут сохранены, игроки отключатся на время запуска.','Restart the server? Worlds will be saved; players disconnect while it starts.')))return;setBusy(true);try{const response=await post<Omit<Accepted,'startedAt'>>('/api/server/restart',{id:crypto.randomUUID(),confirmed:true});if(!response.accepted)throw new Error(app.t('Launcher не подтвердил перезапуск','Launcher did not accept restart'));window.dispatchEvent(new CustomEvent('mcc-server-restart',{detail:{...response,startedAt:Date.now()}}));}catch(e){app.notify(e instanceof Error?e.message:String(e),true);runtime.reload();}finally{setBusy(false);}}
+  return <div className="server-restart-control"><Button disabled={busy||!app.owner||!runtime.data?.restart.available} onClick={()=>void restart()}><Icon name="refresh" size={16}/>{app.t('Перезапустить сервер','Restart server')}</Button>{runtime.data&&!runtime.data.restart.available&&runtime.data.restart.message&&<small>{runtime.data.restart.message}</small>}</div>;
+}
+export function RestartScreen({restart,lang,done}:{restart:Accepted;lang:'ru'|'en';done:()=>void}){
+  const [ready,setReady]=useState(false);const [elapsed,setElapsed]=useState(Math.max(0,Math.floor((Date.now()-restart.startedAt)/1000)));const [offline,setOffline]=useState(false);const t=(ru:string,en:string)=>lang==='ru'?ru:en;
+  useEffect(()=>{let active=true,timer:ReturnType<typeof setTimeout>|undefined,controller:AbortController|undefined;
+    async function probe(){controller=new AbortController();const timeout=setTimeout(()=>controller?.abort(),3000);try{const response=await fetch('/api/server/health',{cache:'no-store',credentials:'same-origin',signal:controller.signal});if(!response.ok)throw new Error();const value=await response.json();if(active&&restartHasCompleted(value,restart.bootId)){setReady(true);return;}}catch{if(active)setOffline(true);}finally{clearTimeout(timeout);}if(active){setElapsed(Math.floor((Date.now()-restart.startedAt)/1000));timer=setTimeout(()=>void probe(),2000);}}
+    void probe();return()=>{active=false;clearTimeout(timer);controller?.abort();};},[restart.bootId,restart.startedAt]);
+  const steps=[t('Запрос принят','Request accepted'),t('Сохраняем миры и останавливаем сервер','Saving worlds and stopping server'),t('Возвращаем мир в игру','Starting your world'),t('Сервер снова в игре','Server is ready')];const step=ready?3:offline?2:1;
+  return <main className="restart-screen"><Brand/><div className={`restart-portal ${ready?'is-ready':''}`} aria-hidden="true"><span/><span/><span/><span/><i/></div><span className="section-kicker">{t('Новая глава','A fresh start')}</span><h1>{ready?t('Твой мир снова здесь.','Your world is back.'):t('Возвращаем твой мир…','Bringing your world back…')}</h1><p role="status" aria-live="polite">{steps[step]}</p><ol className="restart-steps">{steps.map((text,index)=><li key={text} className={index===step?'current':index<step?'complete':''}><b>{index<step?'✓':index+1}</b><span>{text}</span></li>)}</ol>{!ready&&<div className="restart-loading" aria-label={t('Ожидание запуска сервера','Waiting for server startup')}>{[0,1,2,3,4,5].map(i=><i key={i} style={{animationDelay:`${i*.12}s`}}/>)}</div>}{elapsed>=180&&!ready&&<p className="restart-delayed">{t('Запуск занимает больше обычного. Проверка связи продолжается; повторный restart не отправляется. Проверьте журнал launcher, если сервер не запускается.','Startup is taking longer than usual. Connection checks continue; no second restart is sent. Check the launcher log if startup fails.')}</p>}{ready&&<Button className="primary" onClick={done}>{t('Вернуться в панель','Return to dashboard')}<Icon name="arrow" size={17}/></Button>}<small>{ready?t('Для нового запуска потребуется войти снова.','Sign in again for the new server session.'):t('Миры сохраняются штатной командой сервера.','Worlds are saved by the server’s normal shutdown.')}</small></main>;
+}

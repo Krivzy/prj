@@ -1,0 +1,43 @@
+.integrations-workspace{min-width:0;color:var(--ink)}
+.integrations-workspace .page-heading{align-items:center;gap:20px}
+.integrations-eyebrow{color:var(--muted);font-size:11px;letter-spacing:1.6px}
+.integrations-workspace .page-heading p{color:var(--muted);font-size:14px;line-height:1.7;margin:8px 0 0}
+.integrations-switcher{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:22px}
+.integrations-switcher>.button{display:flex;align-items:center;gap:12px;min-height:48px;border-color:var(--line);background:var(--surface)}
+.integrations-switcher>.button.active{border-color:var(--accent);color:var(--accent)}
+.integrations-switcher small{font-size:11px;color:var(--muted)}
+.integration-detail{min-width:0}
+.integration-detail h2,.integration-holder-editor h3{font-family:Monocraft,monospace;line-height:1.6;font-weight:400}
+.integration-status{border:1px solid var(--line);padding:7px 10px;color:var(--muted);font-size:11px;line-height:1.6;max-width:100%}
+.integration-status.ready{color:var(--accent);border-color:var(--accent)}
+.integration-tools{display:grid;gap:22px;min-width:0}
+.integration-note{color:var(--muted);font-size:13px;line-height:1.8;margin:0;max-width:85ch}
+.integration-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:end;padding-top:18px;border-top:1px solid var(--line)}
+.integration-form>.field{margin:0;min-width:0}
+.integration-form input,.integration-form select{min-width:0;min-height:44px;width:100%}
+.integration-form>.button{min-height:44px}
+.integration-node-form,.integration-lookup-form{grid-template-columns:repeat(3,minmax(0,1fr))}
+.integration-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.integration-holder.button{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:7px;min-width:0;text-align:left;padding:16px;min-height:76px}
+.integration-holder>strong,.integration-holder>span{max-width:100%;overflow-wrap:anywhere}
+.integration-holder>span{color:var(--muted);font-size:11px}
+.integration-holder-editor{display:grid;gap:18px;min-width:0}
+.integration-node-list,.integration-records{display:grid;gap:10px;min-width:0}
+.integration-node{display:flex;align-items:center;justify-content:space-between;gap:18px;border:1px solid var(--line);padding:14px 16px;min-width:0}
+.integration-node>div{min-width:0;display:grid;gap:7px;flex:1}
+.integration-node strong{font-family:monospace;font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+.integration-node span{color:var(--muted);font-size:11px;line-height:1.7;overflow-wrap:anywhere}
+.integration-node>.button{min-height:44px;flex:none}
+.integration-record{border:1px solid var(--line);padding:16px;min-width:0;display:grid;gap:12px}
+.integration-record>div{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.integration-record strong,.integration-record p,.integration-record small{overflow-wrap:anywhere}
+.integration-record p{margin:0;line-height:1.7;font-size:14px}
+.integration-record time,.integration-record small{color:var(--muted);font-size:11px;line-height:1.7}
+.integration-record>.button{justify-self:start;min-height:44px}
+.integration-checks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.integration-checks>div{display:flex;justify-content:space-between;align-items:center;gap:16px;min-width:0;border:1px solid var(--line);padding:14px;font-size:13px}
+.integration-checks span{overflow-wrap:anywhere}
+.integration-checks strong{white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--accent)}
+.integration-progress{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;line-height:1.6}
+@media(max-width:900px){.integration-node-form,.integration-lookup-form{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.integrations-workspace .page-heading{align-items:flex-start;flex-direction:column}.integrations-workspace .page-heading>.button{width:100%}.integrations-switcher{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.integrations-switcher>.button{min-width:0;flex-direction:column;gap:5px;padding:10px 7px}.integration-detail .panel-heading{align-items:flex-start;flex-wrap:wrap;gap:12px}.integration-form,.integration-node-form,.integration-lookup-form,.integration-list,.integration-checks{grid-template-columns:minmax(0,1fr)}.integration-node{align-items:flex-start;flex-direction:column;gap:12px}.integration-node>.button{width:100%}.integration-status{font-size:10px}}

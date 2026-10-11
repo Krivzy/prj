@@ -44,7 +44,7 @@ public final class Automation implements AutoCloseable {
         public CompletableFuture<Object> action(String action,Map<String,Object> params){return main.call(()->game.execute(action,params));}
         public CompletableFuture<Object> read(String condition,Map<String,Object> config,Map<String,Object> context){return main.call(()->switch(condition){
             case "onlineCount" -> Bukkit.getOnlinePlayers().size();
-            case "tps" -> Bukkit.getTPS()[0];
+            case "tps" -> {double[] value=ServerPlatform.tps();if(value.length==0)throw new UnsupportedOperationException("TPS measurement is not available yet");yield value[0];}
             case "playerOnline" -> {String uuid=Json.text(config,"uuid",Json.text(context,"uuid",""));AutomationGraph.uuid(uuid);yield Bukkit.getPlayer(UUID.fromString(uuid))!=null;}
             case "worldTime","weather" -> {String name=Json.text(config,"world",Json.text(context,"world",""));World world=Bukkit.getWorld(name);if(world==null)throw new IllegalArgumentException("Condition world is not loaded");yield condition.equals("worldTime")?world.getTime():world.isThundering()?"thunder":world.hasStorm()?"rain":"clear";}
             default -> throw new IllegalArgumentException("Unsupported condition");

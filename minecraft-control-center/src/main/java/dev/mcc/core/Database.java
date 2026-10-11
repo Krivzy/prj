@@ -21,6 +21,7 @@ public final class Database implements AutoCloseable {
             try(Statement s=connection.createStatement()) {
                 s.execute("PRAGMA journal_mode=WAL");s.execute("PRAGMA busy_timeout=5000");
                 s.execute("PRAGMA synchronous=NORMAL");s.execute("PRAGMA foreign_keys=ON");
+                s.execute("PRAGMA cache_size=-2048");s.execute("PRAGMA mmap_size=0");
                 s.execute("CREATE TABLE IF NOT EXISTS users(name TEXT PRIMARY KEY,hash TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('Owner','Admin','Moderator','Viewer')))");
                 s.execute("CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT,time INTEGER NOT NULL,actor TEXT NOT NULL,action TEXT NOT NULL,status TEXT NOT NULL,details TEXT NOT NULL)");
                 s.execute("CREATE INDEX IF NOT EXISTS audit_time ON audit(time)");
@@ -135,10 +136,23 @@ public final class Database implements AutoCloseable {
         return submit(c->{List<Map<String,Object>> out=new ArrayList<>();try(Statement s=c.createStatement();ResultSet r=s.executeQuery("SELECT id,time,actor,action,status,details FROM audit ORDER BY id DESC LIMIT 500")){
             while(r.next())out.add(Map.of("id",r.getLong(1),"time",r.getLong(2),"actor",r.getString(3),"action",r.getString(4),"status",r.getString(5),"details",Json.object(r.getString(6))));}return out;});
     }
-    public CompletableFuture<Void> metric(Map<String,Object> value) {return submit(c->{try(PreparedStatement s=c.prepareStatement("INSERT OR REPLACE INTO metrics VALUES(?,?)")){s.setLong(1,System.currentTimeMillis());s.setString(2,Json.write(value));s.executeUpdate();}return null;});}
+    static Map<String,Object> compactMetric(Map<String,Object> value){
+        Map<String,Object> out=new LinkedHashMap<>();
+        for(String key:List.of("timestamp","mspt","cpu","heapUsed","heapMax","online","maxPlayers","entityCount","loadedChunks","uptimeSeconds"))if(value.get(key) instanceof Number number&&Double.isFinite(number.doubleValue()))out.put(key,number);
+        if(value.get("performanceGuard") instanceof Boolean guard)out.put("performanceGuard",guard);
+        Object tps=value.get("tps");if(tps instanceof Number number&&Double.isFinite(number.doubleValue()))out.put("tps",number);
+        else if(tps instanceof double[] values){out.put("tps",Arrays.stream(values).limit(3).filter(Double::isFinite).toArray());}
+        else if(tps instanceof List<?> values)out.put("tps",values.stream().limit(3).filter(v->v instanceof Number n&&Double.isFinite(n.doubleValue())).toList());
+        return out;
+    }
+    public CompletableFuture<Void> metric(Map<String,Object> value) {Map<String,Object> sample=compactMetric(value);return submit(c->{try(PreparedStatement s=c.prepareStatement("INSERT OR REPLACE INTO metrics VALUES(?,?)")){s.setLong(1,System.currentTimeMillis());s.setString(2,Json.write(sample));s.executeUpdate();}return null;});}
     public CompletableFuture<List<Map<String,Object>>> metrics(long since) {
-        return submit(c->{List<Map<String,Object>> all=new ArrayList<>();try(PreparedStatement s=c.prepareStatement("SELECT time,json FROM metrics WHERE time>=? ORDER BY time")){s.setLong(1,since);try(ResultSet r=s.executeQuery()){while(r.next()){Map<String,Object> row=Json.object(r.getString(2));row.put("time",r.getLong(1));all.add(row);}}}
-            int stride=Math.max(1,(all.size()+359)/360);List<Map<String,Object>> out=new ArrayList<>();for(int i=0;i<all.size();i+=stride)out.add(all.get(i));return out;});
+        return submit(c->{long now=System.currentTimeMillis(),width=Math.max(1,(Math.max(0,now-Math.max(0,since))+360)/360);List<Map<String,Object>> out=new ArrayList<>();
+            // Select actual last samples per time bucket in SQLite before allocating/decoding JSON.
+            try(PreparedStatement s=c.prepareStatement("SELECT time,json FROM metrics WHERE time IN (SELECT MAX(time) FROM metrics WHERE time>=? AND time<=? GROUP BY (time-?)/?) ORDER BY time LIMIT 361")){
+                s.setLong(1,since);s.setLong(2,now);s.setLong(3,Math.max(0,since));s.setLong(4,width);
+                try(ResultSet r=s.executeQuery()){while(r.next()){Map<String,Object> row=compactMetric(Json.object(r.getString(2)));row.put("time",r.getLong(1));out.add(row);}}}
+            return out;});
     }
     public CompletableFuture<List<Map<String,Object>>> documents(String namespace) {return submit(c->{List<Map<String,Object>> out=new ArrayList<>();try(PreparedStatement s=c.prepareStatement("SELECT json FROM documents WHERE namespace=? ORDER BY id")){s.setString(1,namespace);try(ResultSet r=s.executeQuery()){while(r.next())out.add(Json.object(r.getString(1)));}}return out;});}
     public CompletableFuture<Void> document(String namespace,String id,Map<String,Object> value) {return submit(c->{try(PreparedStatement s=c.prepareStatement("INSERT INTO documents VALUES(?,?,?) ON CONFLICT(namespace,id) DO UPDATE SET json=excluded.json")){s.setString(1,namespace);s.setString(2,id);s.setString(3,Json.write(value));s.executeUpdate();}return null;});}

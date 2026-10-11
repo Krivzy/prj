@@ -1,6 +1,6 @@
 package dev.mcc.game;
 
-import net.kyori.adventure.text.Component;
+import dev.mcc.core.ServerPlatform;
 import org.bukkit.*;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.boss.*;
@@ -59,7 +59,7 @@ public final class GameEventEngine implements AutoCloseable, Listener {
 
     private Object start(Map<String, Object> p) {
         if (running.size() >= Math.min(3, Math.max(1, plugin.getConfig().getInt("game.max-active-events", 3)))) throw new IllegalStateException("Достигнут лимит активных событий");
-        if (Bukkit.getTPS()[0] < 18) throw new IllegalStateException("Performance Guard: новые события запрещены при TPS < 18");
+        if (ServerPlatform.lowTps()) throw new IllegalStateException("Performance Guard: новые события запрещены при TPS < 18");
         String preset = string(p, "preset", 30).toLowerCase(Locale.ROOT);
         if (!PRESETS.contains(preset)) throw new IllegalArgumentException("Неизвестный preset события");
         Location location;
@@ -89,7 +89,7 @@ public final class GameEventEngine implements AutoCloseable, Listener {
     private void tick() {
         tick++;
         if (running.isEmpty()) return;
-        boolean guard = Bukkit.getTPS()[0] < 18;
+        boolean guard = ServerPlatform.lowTps();
         long now = System.currentTimeMillis();
         long deadline = System.nanoTime() + 750000;
         int operations = 0;
@@ -142,14 +142,14 @@ public final class GameEventEngine implements AutoCloseable, Listener {
             case "animals" -> point.getWorld().spawnEntity(point, List.of(EntityType.COW, EntityType.SHEEP, EntityType.PIG, EntityType.CHICKEN).get(event.spawned % 4), false);
             case "waves" -> {
                 LivingEntity mob = (LivingEntity) point.getWorld().spawnEntity(point, event.spawned % 3 == 2 ? EntityType.SKELETON : EntityType.ZOMBIE, false);
-                mob.customName(Component.text("MCC · Волна")); mob.setCustomNameVisible(true); yield mob;
+                mob.setCustomName("MCC · Волна"); mob.setCustomNameVisible(true); yield mob;
             }
             case "boss" -> {
                 Zombie boss = point.getWorld().spawn(point, Zombie.class, false, null);
                 var health = boss.getAttribute(Attribute.MAX_HEALTH);
                 if (health != null) { health.setBaseValue(100); boss.setHealth(100); }
                 var damage = boss.getAttribute(Attribute.ATTACK_DAMAGE); if (damage != null) damage.setBaseValue(6);
-                boss.customName(Component.text("MCC · Изумрудный страж")); boss.setCustomNameVisible(true); boss.setRemoveWhenFarAway(false); boss.setPersistent(true);
+                boss.setCustomName("MCC · Изумрудный страж"); boss.setCustomNameVisible(true); boss.setRemoveWhenFarAway(false); boss.setPersistent(true);
                 event.boss = boss.getUniqueId();
                 event.bar = Bukkit.createBossBar("Изумрудный страж", BarColor.GREEN, BarStyle.SEGMENTED_10);
                 point.getWorld().getPlayers().forEach(event.bar::addPlayer);

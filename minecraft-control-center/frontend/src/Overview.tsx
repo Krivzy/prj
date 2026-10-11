@@ -3,6 +3,7 @@ import {duration, formatNumber, time, useApp, useResource} from './context';
 import {useLive} from './live';
 import {ActionButton, Avatar, Button, Empty, Icon, ItemForm, Loading, Modal, Panel} from './ui';
 import {GameImage} from './assets';
+import {RestartControl} from './ServerRestart';
 import type {Catalogs, Metric} from './types';
 const OverworldScene = lazy(() => import('./OverworldScene'));
 const metrics = [
@@ -59,7 +60,7 @@ export default function Overview() {
         <span className="hero-version"><i/>Minecraft {s.minecraftVersion}</span>
         <h2>{app.t('Бесконечный мир.\nПолный контроль.','Infinite world.\nComplete control.')}</h2>
         <p>{app.t('От первого блока до большого сервера.\nВсё, что нужно для следующей главы.','From the first block to a thriving server.\nEverything you need for your next chapter.')}</p>
-        <div className="hero-buttons"><Button className="primary" onClick={() => app.navigate('map')}>{app.t('Открыть карту','Open world map')}<Icon name="arrow" size={18}/></Button><Button className="hero-secondary" onClick={() => app.navigate('worlds')}>{app.t('Управлять мирами','Manage worlds')}</Button></div>
+        <div className="hero-buttons">{app.owner&&<RestartControl/>}<Button className="primary" onClick={() => app.navigate('map')}>{app.t('Открыть карту','Open world map')}<Icon name="arrow" size={18}/></Button><Button className="hero-secondary" onClick={() => app.navigate('worlds')}>{app.t('Управлять мирами','Manage worlds')}</Button></div>
         <span className="hero-live-note"><span className="pixel-cross" aria-hidden="true"/>{s.worldCount ?? s.worlds.length} {app.t('мира подключено','worlds connected')} <b/> {app.t('Синхронизация в реальном времени','Realtime sync')}</span>
       </div>
       <div className="hero-landscape" aria-hidden="true"><Suspense fallback={<div className="scene-placeholder"/>}><OverworldScene compact/></Suspense></div>
@@ -68,7 +69,7 @@ export default function Overview() {
     </section>
     <section className="server-instruments" aria-label={app.t('Показатели сервера','Server metrics')}>
       <div><span>{app.t('Игроки онлайн','Players online')}</span><strong>{s.online}<small>/ {s.maxPlayers}</small></strong><span className="instrument-detail"><i className="mini-health"><b style={{width:`${Math.min(100,s.online/Math.max(1,s.maxPlayers)*100)}%`}}/></i>{app.t('Сейчас в игре','In game now')}</span></div>
-      <div><span>{app.t('Тики в секунду','Ticks per second')}</span><strong>{formatNumber(s.tps?.[0],2)}<small>TPS</small></strong><span className={`instrument-detail ${s.tps?.[0] >= 18 ? 'good' : 'warn'}`}><i className="signal-square"/>{s.tps?.[0] >= 18 ? app.t('Стабильный ритм','Steady rhythm') : app.t('Повышенная нагрузка','Under load')}</span></div>
+      <div><span>{app.t('Тики в секунду','Ticks per second')}</span><strong>{formatNumber(s.tps?.[0],2)}<small>TPS</small></strong><span className={`instrument-detail ${s.tps?.[0] >= 18 ? 'good' : 'warn'}`}><i className="signal-square"/>{typeof s.tps?.[0]!=='number'?app.t('Метрика недоступна','Metric unavailable'):s.tps[0] >= 18 ? app.t('Стабильный ритм','Steady rhythm') : app.t('Повышенная нагрузка','Under load')}</span></div>
       <div><span>{app.t('Время тика','Tick duration')}</span><strong>{formatNumber(s.mspt,2)}<small>ms</small></strong><span className="instrument-detail">{app.t('Бюджет тика','Tick budget')} 50 ms</span></div>
       <div><span>{app.t('Память сервера','Server memory')}</span><strong>{formatNumber(s.heapUsed/1024**3,1)}<small>GiB</small></strong><span className="instrument-detail">{app.t('Доступно JVM','JVM limit')} {gb(s.heapMax)}</span></div>
     </section>

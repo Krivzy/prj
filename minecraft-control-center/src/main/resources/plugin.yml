@@ -2,6 +2,7 @@ name: MinecraftControlCenter
 version: '${version}'
 main: dev.mcc.MccPlugin
 api-version: '26.1.2'
+softdepend: [LuckPerms, CoreProtect, AdvancedBan, GrimAC]
 description: Embedded real-time Minecraft administration with authenticated web dashboard
 authors: [MCC]
 commands:

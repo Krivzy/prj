@@ -47,7 +47,7 @@ export default function Login({status, onAuth, lang, changeLang}: {
         <p className="login-intro-detail">{t('Весь Minecraft-сервер.\nВ одном месте. По твоим правилам.','Your entire Minecraft server.\nOne place. Your rules.')}</p>
       </div>
       <div className="login-landscape"><Suspense fallback={<div className="scene-placeholder"/>}><OverworldScene/></Suspense></div>
-      <div className="auth-footer"><span className="pixel-cross" aria-hidden="true"/><span>Paper · One JAR · Live control</span><span>MCC</span></div>
+      <div className="auth-footer"><span className="pixel-cross" aria-hidden="true"/><span>Minecraft · One JAR · Live control</span><span>MCC</span></div>
     </section>
     <section className="auth-panel">
       <button className="language-button" onClick={changeLang}>{lang === 'ru' ? 'English' : 'Русский'}</button>

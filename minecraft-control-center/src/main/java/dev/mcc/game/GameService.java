@@ -1,12 +1,7 @@
 package dev.mcc.game;
 
-import io.papermc.paper.event.player.AsyncChatEvent;
-import io.papermc.paper.ban.BanListType;
-import io.papermc.paper.registry.RegistryAccess;
-import io.papermc.paper.registry.RegistryKey;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
-import net.kyori.adventure.title.Title;
+import dev.mcc.core.ServerPlatform;
+import dev.mcc.core.GameRules;
 import org.bukkit.*;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeModifier;
@@ -35,8 +30,9 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
+import java.util.function.BooleanSupplier;
 
-/** All entry points except the async chat listener require the Paper main thread. */
+/** All entry points except the async chat listener require the Bukkit main thread. */
 public final class GameService implements Listener, AutoCloseable {
     private final JavaPlugin plugin;
     private final BiConsumer<String, Object> events;
@@ -53,6 +49,7 @@ public final class GameService implements Listener, AutoCloseable {
     private Map<String, Object> catalogCache;
     private BiConsumer<UUID, Map<String, Object>> moderationPersistence = (uuid, state) -> {};
     private volatile java.util.function.Predicate<UUID> muteLookup = uuid -> false;
+    private volatile BooleanSupplier externalManaged = () -> false;
     private Set<String> consoleAllowed = Set.of("list", "say", "time", "weather", "difficulty", "seed", "help", "version", "plugins");
     private boolean closed;
     private int ticks;
@@ -72,6 +69,8 @@ public final class GameService implements Listener, AutoCloseable {
         requireMainThread(); moderationPersistence = Objects.requireNonNull(callback);
     }
     public void setMuteLookup(java.util.function.Predicate<UUID> lookup) { requireMainThread(); muteLookup=Objects.requireNonNull(lookup); }
+    public void externalManaged(BooleanSupplier supplier) { requireMainThread(); externalManaged = Objects.requireNonNull(supplier); }
+    private boolean externallyManaged() { try { return externalManaged.getAsBoolean(); } catch (RuntimeException error) { return true; } }
 
     public void restoreMutes(Map<UUID, Long> restored) {
         requireMainThread();
@@ -111,14 +110,14 @@ public final class GameService implements Listener, AutoCloseable {
         List<Map<String, Object>> worlds = Bukkit.getWorlds().stream().map(w -> worldDto(w, false)).toList();
         int entities = worlds.stream().mapToInt(w -> ((Number) w.get("entityCount")).intValue()).sum();
         int chunks = worlds.stream().mapToInt(w -> ((Number) w.get("loadedChunks")).intValue()).sum();
-        double[] tps = Bukkit.getTPS();
-        return map("timestamp", System.currentTimeMillis(), "serverName", Bukkit.getName(), "version", Bukkit.getVersion(),
-                "minecraftVersion", Bukkit.getMinecraftVersion(), "online", Bukkit.getOnlinePlayers().size(), "maxPlayers", Bukkit.getMaxPlayers(),
-                "tps", Arrays.stream(tps).map(x -> Math.min(20, x)).boxed().toList(), "mspt", Bukkit.getAverageTickTime(),
+        double[] tps = ServerPlatform.tps();
+        return map("timestamp", System.currentTimeMillis(), "serverName", ServerPlatform.brand(), "version", Bukkit.getVersion(),
+                "minecraftVersion", ServerPlatform.minecraftVersion(), "online", Bukkit.getOnlinePlayers().size(), "maxPlayers", Bukkit.getMaxPlayers(),
+                "tps", Arrays.stream(tps).boxed().toList(), "mspt", ServerPlatform.mspt(), "platformMetrics", ServerPlatform.metrics(),
                 "uptimeSeconds", ManagementFactory.getRuntimeMXBean().getUptime() / 1000, "heapUsed", runtime.totalMemory() - runtime.freeMemory(),
                 "heapMax", runtime.maxMemory(), "cpu", null, "loadedChunks", chunks, "entityCount", entities,
-                "worldCount", worlds.size(), "worlds", worlds, "activeEvents", activeEvents(), "pendingSpawnBatches", spawnJobs.size(), "performanceGuard", tps[0] < 18,
-                "motd", PlainTextComponentSerializer.plainText().serialize(Bukkit.motd()), "whitelist", Bukkit.hasWhitelist(), "viewDistance", Bukkit.getViewDistance(), "simulationDistance", Bukkit.getSimulationDistance());
+                "worldCount", worlds.size(), "worlds", worlds, "activeEvents", activeEvents(), "pendingSpawnBatches", spawnJobs.size(), "performanceGuard", ServerPlatform.performanceGuard(),
+                "motd", plain(Bukkit.getMotd()), "whitelist", Bukkit.hasWhitelist(), "viewDistance", Bukkit.getViewDistance(), "simulationDistance", Bukkit.getSimulationDistance());
     }
 
     public List<Map<String, Object>> players() {
@@ -146,7 +145,7 @@ public final class GameService implements Listener, AutoCloseable {
                 "maxHealth", max == null ? 20 : max.getValue(), "food", p.getFoodLevel(), "level", p.getLevel(), "gamemode", p.getGameMode().name(),
                 "ping", p.getPing(), "op", p.isOp(), "connectionTime", joinedAt.get(p.getUniqueId()));
         if (details) {
-            dto.putAll(map("xp", p.calculateTotalExperiencePoints(), "exp", p.getExp(), "saturation", p.getSaturation(), "air", p.getRemainingAir(),
+            dto.putAll(map("xp", ServerPlatform.totalExperience(p), "exp", p.getExp(), "saturation", p.getSaturation(), "air", p.getRemainingAir(),
                     "fireTicks", p.getFireTicks(), "allowFlight", p.getAllowFlight(), "flying", p.isFlying(), "walkSpeed", p.getWalkSpeed(),
                     "flySpeed", p.getFlySpeed(), "glowing", p.isGlowing(), "invisible", p.isInvisible(), "frozen", frozen.contains(p.getUniqueId()), "muted", muted(p.getUniqueId()),
                     "muteExpiresAt", mutes.get(p.getUniqueId()), "effects", p.getActivePotionEffects().stream().map(e -> map("type", e.getType().getKey().toString(), "duration", e.getDuration(), "amplifier", e.getAmplifier(), "ambient", e.isAmbient(), "particles", e.hasParticles())).toList()));
@@ -177,14 +176,14 @@ public final class GameService implements Listener, AutoCloseable {
         Location center = w.getWorldBorder().getCenter();
         Map<String, Object> out = map("name", w.getName(), "uuid", w.getUID().toString(), "environment", w.getEnvironment().name(),
                 "time", w.getTime(), "fullTime", w.getFullTime(), "weather", w.isThundering() ? "thunder" : w.hasStorm() ? "rain" : "clear", "difficulty", w.getDifficulty().name(),
-                "pvp", w.getGameRuleValue(GameRules.PVP), "loadedChunks", w.getChunkCount(), "entityCount", w.getEntityCount(), "players", w.getPlayerCount(),
+                "pvp", w.getPVP(), "loadedChunks", w.getLoadedChunks().length, "entityCount", ServerPlatform.entityCount(w), "players", w.getPlayers().size(),
                 "border", map("size", w.getWorldBorder().getSize(), "x", center.getX(), "z", center.getZ()), "spawn", locationDto(w.getSpawnLocation()));
         out.put("viewDistance", w.getViewDistance()); out.put("simulationDistance", w.getSimulationDistance());
         if (detailed) {
             Map<String, Object> rules = new TreeMap<>();
-            for (GameRule<?> rule : Registry.GAME_RULE) {
+            for (Object rule : Registry.GAME_RULE) {
                 // The registry includes experimental rules absent from worlds without their feature flag.
-                try { rules.put(rule.getKey().toString(), w.getGameRuleValue(rule)); }
+                try { rules.put(GameRules.key(rule).toString(), GameRules.value(w, rule)); }
                 catch (IllegalArgumentException unavailableRule) { /* Not available in this world's feature set. */ }
             }
             out.put("gamerules", rules);
@@ -198,9 +197,9 @@ public final class GameService implements Listener, AutoCloseable {
         if (catalogCache == null) {
             List<Map<String, Object>> materials = Arrays.stream(Material.values()).filter(m -> m.isItem() || m.isBlock()).map(m -> map("key", m.name(), "name", m.name(), "maxStackSize", m.isItem()?m.getMaxStackSize():0, "item", m.isItem(), "block", m.isBlock())).toList();
             List<String> mobs = Arrays.stream(EntityType.values()).filter(GameService::allowedMob).map(Enum::name).sorted().toList();
-            List<Map<String, Object>> ench = RegistryAccess.registryAccess().getRegistry(RegistryKey.ENCHANTMENT).stream().map(e -> map("key", e.getKey().toString(), "maxLevel", e.getMaxLevel())).toList();
+            List<Map<String, Object>> ench = Registry.ENCHANTMENT.stream().map(e -> map("key", e.getKey().toString(), "maxLevel", e.getMaxLevel())).toList();
             catalogCache = map("materials", materials, "mobs", mobs, "effects", Registry.EFFECT.stream().map(e -> e.getKey().toString()).toList(),
-                    "enchantments", ench, "sounds", Registry.SOUND_EVENT.keyStream().map(NamespacedKey::toString).toList(), "attributes", Registry.ATTRIBUTE.stream().map(a -> a.getKey().toString()).toList(),
+                    "enchantments", ench, "sounds", Registry.SOUNDS.stream().map(sound -> sound.getKey().toString()).toList(), "attributes", Registry.ATTRIBUTE.stream().map(a -> a.getKey().toString()).toList(),
                     "eventPresets", List.of("waves", "fireworks", "lightning", "treasure", "animals", "boss"));
         }
         return catalogCache;
@@ -208,21 +207,21 @@ public final class GameService implements Listener, AutoCloseable {
 
     public List<Map<String, Object>> plugins() {
         requireMainThread();
-        return Arrays.stream(Bukkit.getPluginManager().getPlugins()).map(p -> map("name", p.getName(), "version", p.getPluginMeta().getVersion(), "enabled", p.isEnabled(), "authors", p.getPluginMeta().getAuthors(), "description", p.getPluginMeta().getDescription())).toList();
+        return Arrays.stream(Bukkit.getPluginManager().getPlugins()).map(p -> map("name", p.getName(), "version", p.getDescription().getVersion(), "enabled", p.isEnabled(), "authors", p.getDescription().getAuthors(), "description", p.getDescription().getDescription())).toList();
     }
 
     /** Bounded inspector query near an explicitly chosen loaded location. */
     public List<Map<String, Object>> entities(Map<String, Object> params) {
         requireMainThread();
         Location center = location(params); requireLoaded(center);
-        if (Bukkit.getTPS()[0] < 18) throw new IllegalStateException("Performance Guard: инспектор мобов приостановлен при TPS < 18");
+        if (ServerPlatform.lowTps()) throw new IllegalStateException("Performance Guard: инспектор мобов приостановлен при TPS < 18");
         double radius = decimal(params, "radius", 1, 32, 16);
         List<Map<String, Object>> result = new ArrayList<>();
         int[] accepted = {0};
         for (Entity entity : center.getWorld().getNearbyEntities(center, radius, radius, radius, e -> { if (accepted[0] >= 100 || !(e instanceof LivingEntity) || e instanceof Player) return false; accepted[0]++; return true; })) {
             if (result.size() >= 100) break;
             LivingEntity living = (LivingEntity) entity; Location l = entity.getLocation(); var max = living.getAttribute(Attribute.MAX_HEALTH);
-            result.add(map("uuid", entity.getUniqueId().toString(), "type", entity.getType().name(), "name", entity.customName() == null ? "" : PlainTextComponentSerializer.plainText().serialize(entity.customName()),
+            result.add(map("uuid", entity.getUniqueId().toString(), "type", entity.getType().name(), "name", plain(entity.getCustomName()),
                     "world", entity.getWorld().getName(), "x", l.getX(), "y", l.getY(), "z", l.getZ(), "health", living.getHealth(), "maxHealth", max == null ? null : max.getValue(), "ai", living.hasAI(),
                     "glowing", entity.isGlowing(), "invisible", living.isInvisible(), "silent", entity.isSilent(), "invulnerable", entity.isInvulnerable(), "persistent", entity.isPersistent()));
         }
@@ -242,7 +241,7 @@ public final class GameService implements Listener, AutoCloseable {
         return switch (action) {
             case "mob.spawn" -> enqueueSpawn(p);
             case "mob.modify" -> modifyMob(p);
-            case "chat.broadcast" -> { String text = string(p, "message", 1000); Bukkit.broadcast(Component.text(text)); events.accept("chat", map("at", System.currentTimeMillis(), "name", "MCC", "message", text, "source", "panel")); yield map("delivered", Bukkit.getOnlinePlayers().size()); }
+            case "chat.broadcast" -> { String text = string(p, "message", 1000); Bukkit.broadcastMessage(text); events.accept("chat", map("at", System.currentTimeMillis(), "name", "MCC", "message", text, "source", "panel")); yield map("delivered", Bukkit.getOnlinePlayers().size()); }
             case "console.command" -> consoleCommand(p);
             case "server.settings" -> serverSettings(p);
             case "players.heal_all" -> { int count = 0; for (Player player : Bukkit.getOnlinePlayers()) { heal(player); count++; } yield map("healed", count); }
@@ -266,26 +265,25 @@ public final class GameService implements Listener, AutoCloseable {
             case "world.border" -> {
                 double size = decimal(p, "size", 1, 59999968); double x = decimal(p, "x", -29999984, 29999984, w.getWorldBorder().getCenter().getX()); double z = decimal(p, "z", -29999984, 29999984, w.getWorldBorder().getCenter().getZ());
                 int seconds = integer(p, "seconds", 0, 3600, 0);
-                w.getWorldBorder().setCenter(x, z); w.getWorldBorder().changeSize(size, seconds * 20L);
+                w.getWorldBorder().setCenter(x, z); w.getWorldBorder().setSize(size, seconds);
             }
             case "world.spawn" -> { Location l = location(p); requireLoaded(l); if (!w.setSpawnLocation(l)) throw new IllegalStateException("Spawn не изменён сервером"); }
-            case "world.pvp" -> w.setGameRule(GameRules.PVP, bool(p, "enabled", true));
+            case "world.pvp" -> w.setPVP(bool(p, "enabled", true));
             case "world.save" -> w.save();
-            case "world.view_distance" -> w.setViewDistance(integer(p, "distance", 2, 32));
-            case "world.simulation_distance" -> w.setSimulationDistance(integer(p, "distance", 2, 32));
+            case "world.view_distance" -> ServerPlatform.worldDistance(w, false, integer(p, "distance", 2, 32));
+            case "world.simulation_distance" -> ServerPlatform.worldDistance(w, true, integer(p, "distance", 2, 32));
             default -> throw new IllegalArgumentException("Неизвестное действие мира");
         }
         Map<String, Object> result = worldDto(w, true); events.accept("world", result); return result;
     }
 
-    @SuppressWarnings({"rawtypes", "unchecked"})
     private void setGameRule(World w, Map<String, Object> p) {
-        GameRule rule = Registry.GAME_RULE.get(key(string(p, "rule", 100)));
+        Object rule = Registry.GAME_RULE.get(key(string(p, "rule", 100)));
         if (rule == null) throw new IllegalArgumentException("Неизвестный gamerule");
         Object value;
-        if (rule.getType() == Boolean.class) value = requiredBoolean(p, "value");
-        else if (rule.getType() == Integer.class) {
-            String name = rule.getKey().getKey();
+        if (GameRules.type(rule) == Boolean.class) value = requiredBoolean(p, "value");
+        else if (GameRules.type(rule) == Integer.class) {
+            String name = GameRules.key(rule).getKey();
             int max = switch (name) {
                 case "random_tick_speed" -> 128;
                 case "players_sleeping_percentage" -> 100;
@@ -299,15 +297,16 @@ public final class GameService implements Listener, AutoCloseable {
             value = integer(p, "value", min, max);
         }
         else throw new IllegalArgumentException("Этот тип gamerule пока не поддержан");
-        if (!w.setGameRule(rule, value)) throw new IllegalArgumentException("Значение отклонено сервером");
+        if (!GameRules.set(w, rule, value)) throw new IllegalArgumentException("Значение отклонено сервером");
     }
 
     private Object playerAction(String action, Map<String, Object> p) {
+        if (externallyManaged() && Set.of("player.mute", "player.unmute", "player.ban", "player.unban", "player.kick", "player.ipban", "player.ban_ip", "player.unban_ip").contains(action)) throw new IllegalStateException("Наказания управляются AdvancedBan; native действие MCC отключено");
         if (action.equals("player.unban_ip")) {
             java.net.InetAddress address;
             try { address = java.net.InetAddress.ofLiteral(string(p, "address", 64)); } catch (IllegalArgumentException ex) { throw new IllegalArgumentException("Требуется IP literal, не hostname"); }
-            Bukkit.getBanList(BanListType.IP).pardon(address);
-            return map("address", address.getHostAddress(), "banned", Bukkit.getBanList(BanListType.IP).isBanned(address));
+            Bukkit.<org.bukkit.ban.IpBanList>getBanList(BanList.Type.IP).pardon(address);
+            return map("address", address.getHostAddress(), "banned", Bukkit.<org.bukkit.ban.IpBanList>getBanList(BanList.Type.IP).isBanned(address));
         }
         UUID id = parseUuid(string(p, "uuid", 36));
         if (Set.of("player.mute", "player.unmute").contains(action)) {
@@ -321,8 +320,8 @@ public final class GameService implements Listener, AutoCloseable {
         if (Set.of("player.ban", "player.unban", "player.op", "player.deop").contains(action)) {
             OfflinePlayer target = Bukkit.getOfflinePlayer(id);
             switch (action) {
-                case "player.ban" -> { String reason = optionalString(p, "reason", 500, "Заблокирован администратором MCC"); int seconds = integer(p, "seconds", 0, 31536000, 0); target.ban(reason, seconds == 0 ? (Duration) null : Duration.ofSeconds(seconds), "MCC"); Player live = target.getPlayer(); if (live != null) live.kick(Component.text(reason)); }
-                case "player.unban" -> Bukkit.getBanList(BanListType.PROFILE).pardon(target.getPlayerProfile());
+                case "player.ban" -> { String reason = optionalString(p, "reason", 500, "Заблокирован администратором MCC"); int seconds = integer(p, "seconds", 0, 31536000, 0); target.ban(reason, seconds == 0 ? (Duration) null : Duration.ofSeconds(seconds), "MCC"); Player live = target.getPlayer(); if (live != null) live.kickPlayer(reason); }
+                case "player.unban" -> Bukkit.<org.bukkit.ban.ProfileBanList>getBanList(BanList.Type.PROFILE).pardon(ServerPlatform.profile(target));
                 case "player.op" -> target.setOp(true);
                 case "player.deop" -> target.setOp(false);
                 default -> throw new IllegalArgumentException("Недопустимое действие");
@@ -333,13 +332,13 @@ public final class GameService implements Listener, AutoCloseable {
         switch (action) {
             case "player.heal" -> heal(player);
             case "player.feed" -> { player.setFoodLevel(20); player.setSaturation(20); }
-            case "player.kick" -> player.kick(Component.text(optionalString(p, "reason", 500, "Отключён администратором MCC")));
+            case "player.kick" -> player.kickPlayer(optionalString(p, "reason", 500, "Отключён администратором MCC"));
             case "player.ipban", "player.ban_ip" -> {
                 String reason = optionalString(p, "reason", 500, "IP заблокирован администратором MCC");
                 int seconds = integer(p, "seconds", 0, 31536000, 0);
                 var address = player.getAddress(); if (address == null) throw new IllegalStateException("IP игрока недоступен");
                 var entry = player.banIp(reason, seconds == 0 ? (Duration) null : Duration.ofSeconds(seconds), "MCC", true);
-                if (entry == null || !Bukkit.getBanList(BanListType.IP).isBanned(address.getAddress())) throw new IllegalStateException("IP ban не подтверждён сервером");
+                if (entry == null || !Bukkit.<org.bukkit.ban.IpBanList>getBanList(BanList.Type.IP).isBanned(address.getAddress())) throw new IllegalStateException("IP ban не подтверждён сервером");
                 return map("uuid", id.toString(), "address", address.getAddress().getHostAddress(), "banned", true);
             }
             case "player.kill" -> player.setHealth(0);
@@ -352,7 +351,7 @@ public final class GameService implements Listener, AutoCloseable {
                 if (!player.teleport(dest, PlayerTeleportEvent.TeleportCause.PLUGIN)) throw new IllegalStateException("Телепортация отменена сервером или другим плагином");
             }
             case "player.spawnpoint" -> { Location dest = p.containsKey("world") ? location(p) : player.getLocation(); requireLoaded(dest); player.setRespawnLocation(dest, true); }
-            case "player.xp" -> { int amount = integer(p, "amount", -100000, 100000); if ((long) player.calculateTotalExperiencePoints() + amount < 0) throw new IllegalArgumentException("Опыт не может быть отрицательным"); player.giveExp(amount); }
+            case "player.xp" -> { int amount = integer(p, "amount", -100000, 100000); if ((long) ServerPlatform.totalExperience(player) + amount < 0) throw new IllegalArgumentException("Опыт не может быть отрицательным"); player.giveExp(amount); }
             case "player.level" -> player.setLevel(integer(p, "level", 0, 10000));
             case "player.flight" -> { boolean enabled = requiredBoolean(p, "enabled"); player.setAllowFlight(enabled); if (!enabled) player.setFlying(false); }
             case "player.speed" -> { String kind = optionalString(p, "kind", 10, "walk"); float speed = (float) decimal(p, "speed", -1, 1); if (kind.equals("walk")) player.setWalkSpeed(speed); else if (kind.equals("fly")) player.setFlySpeed(speed); else throw new IllegalArgumentException("kind: walk или fly"); }
@@ -360,9 +359,9 @@ public final class GameService implements Listener, AutoCloseable {
             case "player.clear_inventory" -> { inventoryOf(player, optionalString(p, "kind", 10, "main")).clear(); player.updateInventory(); }
             case "player.give" -> { ItemStack item = createItem(object(p, "item")); int requested = item.getAmount(); var left = player.getInventory().addItem(item); player.updateInventory(); events.accept("inventory", map("uuid", id.toString(), "kind", "main")); return map("given", requested - left.values().stream().mapToInt(ItemStack::getAmount).sum(), "leftover", left.values().stream().map(GameService::itemDto).toList()); }
             case "player.remove_item" -> { Material material = material(string(p, "material", 100)); int count = integer(p, "amount", 1, 4096, 1); int removed = 0; Inventory inv = inventoryOf(player, optionalString(p, "kind", 10, "main")); for (int i = 0; i < inv.getSize() && removed < count; i++) { ItemStack item = inv.getItem(i); if (item != null && item.getType() == material) { int n = Math.min(item.getAmount(), count - removed); removed += n; if (n == item.getAmount()) inv.setItem(i, null); else { item.setAmount(item.getAmount() - n); inv.setItem(i, item); } } } player.updateInventory(); events.accept("inventory", map("uuid", id.toString(), "kind", optionalString(p, "kind", 10, "main"))); return map("removed", removed); }
-            case "player.message" -> player.sendMessage(Component.text(string(p, "message", 1000)));
-            case "player.title" -> { String title = optionalString(p, "title", 200, ""); String subtitle = optionalString(p, "subtitle", 300, ""); int duration = integer(p, "seconds", 1, 30, 3); player.showTitle(Title.title(Component.text(title), Component.text(subtitle), Title.Times.times(Duration.ofMillis(300), Duration.ofSeconds(duration), Duration.ofMillis(500)))); }
-            case "player.actionbar" -> player.sendActionBar(Component.text(string(p, "message", 500)));
+            case "player.message" -> player.sendMessage(string(p, "message", 1000));
+            case "player.title" -> { String title = optionalString(p, "title", 200, ""); String subtitle = optionalString(p, "subtitle", 300, ""); int duration = integer(p, "seconds", 1, 30, 3); player.sendTitle(title, subtitle, 6, duration * 20, 10); }
+            case "player.actionbar" -> player.spigot().sendMessage(net.md_5.bungee.api.ChatMessageType.ACTION_BAR, new net.md_5.bungee.api.chat.TextComponent(string(p, "message", 500)));
             case "player.sound" -> { Sound sound = Registry.SOUNDS.get(key(string(p, "sound", 150))); if (sound == null) throw new IllegalArgumentException("Неизвестный звук"); float volume = (float) decimal(p, "volume", 0, 4, 1); float pitch = (float) decimal(p, "pitch", 0.5, 2, 1); player.playSound(player.getLocation(), sound, volume, pitch); }
             case "player.glowing" -> player.setGlowing(requiredBoolean(p, "enabled"));
             case "player.invisible" -> player.setInvisible(requiredBoolean(p, "enabled"));
@@ -397,9 +396,13 @@ public final class GameService implements Listener, AutoCloseable {
         Set<String> dangerous = Set.of("stop", "restart", "reload", "rl", "execute", "data", "function", "schedule", "op", "deop", "ban", "ban-ip", "pardon", "pardon-ip", "whitelist", "save-off", "forceload", "fill", "clone", "setblock", "worldborder", "permission", "luckperms", "lp", "plugman");
         if (dangerous.contains(label) || !consoleAllowed.contains(label)) throw new IllegalArgumentException("Команда отсутствует в разрешённом списке. Используйте типизированные действия MCC.");
         List<String> output = Collections.synchronizedList(new ArrayList<>());
-        var sender = Bukkit.createCommandSender(component -> { String line = PlainTextComponentSerializer.plainText().serialize(component); synchronized (output) { if (output.size() < 100) output.add(line.length() > 2000 ? line.substring(0, 2000) : line); } events.accept("console", map("at", System.currentTimeMillis(), "level", "INFO", "message", line)); });
+        org.bukkit.command.ConsoleCommandSender console = Bukkit.getConsoleSender();
+        var sender = (org.bukkit.command.ConsoleCommandSender) java.lang.reflect.Proxy.newProxyInstance(org.bukkit.command.ConsoleCommandSender.class.getClassLoader(), new Class<?>[]{org.bukkit.command.ConsoleCommandSender.class}, (proxy, method, args) -> {
+            if (method.getName().equals("sendMessage")) { if (args != null) for (Object argument : args) { String[] lines = argument instanceof String text ? new String[]{text} : argument instanceof String[] texts ? texts : new String[0]; for (String text : lines) { String line = plain(text); synchronized (output) { if (output.size() < 100) output.add(line.length() > 2000 ? line.substring(0, 2000) : line); } events.accept("console", map("at", System.currentTimeMillis(), "level", "INFO", "message", line)); } } return null; }
+            try { return method.invoke(console, args); } catch (java.lang.reflect.InvocationTargetException error) { throw error.getCause(); }
+        });
         boolean dispatched = Bukkit.dispatchCommand(sender, command);
-        return map("dispatched", dispatched, "command", command, "output", List.copyOf(output));
+        return map("dispatched", dispatched, "command", command, "output", List.copyOf(output), "outputCapture", "bukkit-string-messages");
     }
 
     private Object serverSettings(Map<String, Object> p) {
@@ -407,14 +410,14 @@ public final class GameService implements Listener, AutoCloseable {
         Boolean whitelist = p.containsKey("whitelist") ? requiredBoolean(p, "whitelist") : null;
         Integer maxPlayers = p.containsKey("maxPlayers") ? integer(p, "maxPlayers", 1, 1000) : null;
         if (motd == null && whitelist == null && maxPlayers == null) throw new IllegalArgumentException("Укажите motd, whitelist или maxPlayers");
-        if (motd != null) Bukkit.motd(Component.text(motd));
+        if (motd != null) Bukkit.setMotd(motd);
         if (whitelist != null) Bukkit.setWhitelist(whitelist);
         if (maxPlayers != null) Bukkit.setMaxPlayers(maxPlayers);
-        return map("motd", PlainTextComponentSerializer.plainText().serialize(Bukkit.motd()), "whitelist", Bukkit.hasWhitelist(), "maxPlayers", Bukkit.getMaxPlayers(), "persistence", "MOTD/maxPlayers apply at runtime; Paper persists whitelist to server.properties");
+        return map("motd", plain(Bukkit.getMotd()), "whitelist", Bukkit.hasWhitelist(), "maxPlayers", Bukkit.getMaxPlayers(), "persistence", "MOTD/maxPlayers apply at runtime; whitelist persistence follows the server implementation");
     }
 
     private Object enqueueSpawn(Map<String, Object> p) {
-        if (Bukkit.getTPS()[0] < 18) throw new IllegalStateException("Performance Guard: спавн приостановлен при TPS < 18");
+        if (ServerPlatform.lowTps()) throw new IllegalStateException("Performance Guard: спавн приостановлен при TPS < 18");
         if (spawnJobs.size() >= 4) throw new IllegalStateException("Очередь спавна заполнена");
         EntityType type = enumValue(EntityType.class, string(p, "type", 80));
         if (!allowedMob(type)) throw new IllegalArgumentException("Этот entity type не разрешён для спавна MCC");
@@ -422,7 +425,7 @@ public final class GameService implements Listener, AutoCloseable {
         int count = integer(p, "count", 1, Math.min(128, plugin.getConfig().getInt("game.max-spawn-count", 128)), 1);
         double radius = decimal(p, "radius", 0, 16, 0);
         MobSettings settings = MobSettings.parse(p);
-        if (location.getWorld().getEntityCount() > plugin.getConfig().getInt("game.max-world-entities", 10000)) throw new IllegalStateException("Достигнут лимит сущностей мира");
+        if (ServerPlatform.entityCount(location.getWorld()) > plugin.getConfig().getInt("game.max-world-entities", 10000)) throw new IllegalStateException("Достигнут лимит сущностей мира");
         SpawnJob job = new SpawnJob(UUID.randomUUID().toString(), type, location.clone(), count, radius, settings);
         spawnJobs.add(job); events.accept("spawn", job.dto("queued")); return job.dto("queued");
     }
@@ -438,7 +441,7 @@ public final class GameService implements Listener, AutoCloseable {
         Boolean silent = p.containsKey("silent") ? requiredBoolean(p, "silent") : null;
         Boolean invulnerable = p.containsKey("invulnerable") ? requiredBoolean(p, "invulnerable") : null;
         boolean remove = bool(p, "remove", false);
-        if (name != null) { living.customName(name.isEmpty() ? null : Component.text(name)); living.setCustomNameVisible(!name.isEmpty()); }
+        if (name != null) { living.setCustomName(name.isEmpty() ? null : name); living.setCustomNameVisible(!name.isEmpty()); }
         if (health != null) living.setHealth(health); if (ai != null) living.setAI(ai); if (glowing != null) living.setGlowing(glowing); if (invisible != null) living.setInvisible(invisible); if (silent != null) living.setSilent(silent); if (invulnerable != null) living.setInvulnerable(invulnerable);
         if (remove) living.remove();
         return map("uuid", entity.getUniqueId().toString(), "type", entity.getType().name(), "valid", entity.isValid(), "health", living.getHealth(), "ai", living.hasAI(), "glowing", living.isGlowing());
@@ -446,16 +449,17 @@ public final class GameService implements Listener, AutoCloseable {
 
     private void tick() {
         if (closed) return;
+        ServerPlatform.tick();
         ticks++;
         long deadline = System.nanoTime() + 750000;
         int spawned = 0;
         while (!spawnJobs.isEmpty() && spawned < 5 && System.nanoTime() < deadline) {
             SpawnJob job = spawnJobs.peek();
-            if (Bukkit.getTPS()[0] < 18) break;
+            if (ServerPlatform.lowTps()) break;
             Location loc = job.location.clone().add((Math.random() - 0.5) * job.radius * 2, 0, (Math.random() - 0.5) * job.radius * 2);
             try {
                 requireLoaded(loc);
-                if (loc.getWorld().getEntityCount() >= plugin.getConfig().getInt("game.max-world-entities", 10000)) throw new IllegalStateException("Достигнут лимит сущностей мира");
+                if (ServerPlatform.entityCount(loc.getWorld()) >= plugin.getConfig().getInt("game.max-world-entities", 10000)) throw new IllegalStateException("Достигнут лимит сущностей мира");
                 Entity entity = loc.getWorld().spawnEntity(loc, job.type);
                 if (entity.isValid()) { try { job.settings.apply(entity); job.spawned++; job.entityUuids.add(entity.getUniqueId().toString()); } catch (RuntimeException ex) { entity.remove(); throw ex; } } else job.failed++;
             } catch (RuntimeException ex) { job.failed++; job.lastError = ex.getMessage(); }
@@ -481,7 +485,7 @@ public final class GameService implements Listener, AutoCloseable {
                 p.containsKey("persistent") ? requiredBoolean(p, "persistent") : null, p.containsKey("glowing") ? requiredBoolean(p, "glowing") : null); }
         void apply(Entity entity) {
             if (!(entity instanceof LivingEntity living)) throw new IllegalArgumentException("Нужен living entity");
-            if (name != null) { living.customName(name.isEmpty() ? null : Component.text(name)); living.setCustomNameVisible(!name.isEmpty()); }
+            if (name != null) { living.setCustomName(name.isEmpty() ? null : name); living.setCustomNameVisible(!name.isEmpty()); }
             if (health != null) { var attribute = living.getAttribute(Attribute.MAX_HEALTH); if (attribute == null) throw new IllegalArgumentException("Сущность не поддерживает max health"); attribute.setBaseValue(health); living.setHealth(Math.min(health, attribute.getValue())); }
             if (ai != null) living.setAI(ai);
             if (persistent != null) { living.setPersistent(persistent); living.setRemoveWhenFarAway(!persistent); }
@@ -500,13 +504,13 @@ public final class GameService implements Listener, AutoCloseable {
         ItemStack item = original != null && original.getType() == material ? original.clone() : new ItemStack(material);
         item.setAmount(integer(p, "amount", 1, item.getMaxStackSize(), 1));
         ItemMeta meta = item.getItemMeta();
-        if (p.containsKey("name")) { String name = optionalString(p, "name", 200, ""); String existing = meta.hasDisplayName() ? PlainTextComponentSerializer.plainText().serialize(meta.displayName()) : ""; if (!name.equals(existing)) meta.displayName(name.isEmpty() ? null : Component.text(name)); }
-        if (p.containsKey("lore")) { List<?> lore = list(p, "lore", 20); List<Component> lines = lore.stream().<Component>map(x -> { if (!(x instanceof String s) || s.length() > 300) throw new IllegalArgumentException("Lore: максимум 20 строк по 300 символов"); return Component.text(s); }).toList(); List<String> existing = meta.hasLore() ? meta.lore().stream().map(PlainTextComponentSerializer.plainText()::serialize).toList() : List.of(); if (!lore.equals(existing)) meta.lore(lines); }
+        if (p.containsKey("name")) { String name = optionalString(p, "name", 200, ""); String existing = meta.hasDisplayName() ? plain(meta.getDisplayName()) : ""; if (!name.equals(existing)) meta.setDisplayName(name.isEmpty() ? null : name); }
+        if (p.containsKey("lore")) { List<?> lore = list(p, "lore", 20); List<String> lines = lore.stream().map(x -> { if (!(x instanceof String s) || s.length() > 300) throw new IllegalArgumentException("Lore: максимум 20 строк по 300 символов"); return s; }).toList(); List<String> existing = meta.hasLore() ? meta.getLore().stream().map(GameService::plain).toList() : List.of(); if (!lore.equals(existing)) meta.setLore(lines); }
         if (p.containsKey("unbreakable")) meta.setUnbreakable(requiredBoolean(p, "unbreakable"));
         if (p.containsKey("damage")) { int max = meta instanceof Damageable damage && damage.hasMaxDamage() ? damage.getMaxDamage() : material.getMaxDurability(); int n = integer(p, "damage", 0, max); if (meta instanceof Damageable damage) damage.setDamage(n); else if (n != 0) throw new IllegalArgumentException("Предмет не имеет прочности"); }
-        if (p.containsKey("enchantments")) { var ench = object(p, "enchantments"); if (ench.size() > 20) throw new IllegalArgumentException("Максимум 20 enchantments"); Map<String,Integer> existing = new TreeMap<>(); meta.getEnchants().forEach((enchantment, level) -> existing.put(enchantment.getKey().toString(), level)); if (!existing.equals(ench)) { for (var enchantment : Set.copyOf(meta.getEnchants().keySet())) meta.removeEnchant(enchantment); for (var e : ench.entrySet()) { var type = RegistryAccess.registryAccess().getRegistry(RegistryKey.ENCHANTMENT).get(key(e.getKey())); if (type == null) throw new IllegalArgumentException("Неизвестное зачарование " + e.getKey()); int level = integer(map("level", e.getValue()), "level", 1, type.getMaxLevel()); if (!type.canEnchantItem(item)) throw new IllegalArgumentException("Зачарование несовместимо с предметом"); meta.addEnchant(type, level, false); } } }
+        if (p.containsKey("enchantments")) { var ench = object(p, "enchantments"); if (ench.size() > 20) throw new IllegalArgumentException("Максимум 20 enchantments"); Map<String,Integer> existing = new TreeMap<>(); meta.getEnchants().forEach((enchantment, level) -> existing.put(enchantment.getKey().toString(), level)); if (!existing.equals(ench)) { for (var enchantment : Set.copyOf(meta.getEnchants().keySet())) meta.removeEnchant(enchantment); for (var e : ench.entrySet()) { var type = Registry.ENCHANTMENT.get(key(e.getKey())); if (type == null) throw new IllegalArgumentException("Неизвестное зачарование " + e.getKey()); int level = integer(map("level", e.getValue()), "level", 1, type.getMaxLevel()); if (!type.canEnchantItem(item)) throw new IllegalArgumentException("Зачарование несовместимо с предметом"); meta.addEnchant(type, level, false); } } }
         if (p.containsKey("flags")) { meta.removeItemFlags(meta.getItemFlags().toArray(ItemFlag[]::new)); for (Object flag : list(p, "flags", 15)) meta.addItemFlags(enumValue(ItemFlag.class, String.valueOf(flag))); }
-        if (p.containsKey("attributes")) { meta.setAttributeModifiers(null); int i = 0; for (Object entry : list(p, "attributes", 12)) { if (!(entry instanceof Map<?, ?> raw)) throw new IllegalArgumentException("attribute должен быть объектом"); @SuppressWarnings("unchecked") Map<String,Object> a = (Map<String,Object>)raw; Attribute attribute = Registry.ATTRIBUTE.get(key(string(a, "attribute", 100))); if (attribute == null) throw new IllegalArgumentException("Неизвестный attribute"); double amount = decimal(a, "amount", -100, 100); var operation = enumValue(AttributeModifier.Operation.class, optionalString(a, "operation", 40, "ADD_NUMBER")); meta.addAttributeModifier(attribute, new AttributeModifier(new NamespacedKey("mcc", "item_attribute_" + i++), amount, operation)); } }
+        if (p.containsKey("attributes")) { meta.setAttributeModifiers(null); int i = 0; for (Object entry : list(p, "attributes", 12)) { if (!(entry instanceof Map<?, ?> raw)) throw new IllegalArgumentException("attribute должен быть объектом"); @SuppressWarnings("unchecked") Map<String,Object> a = (Map<String,Object>)raw; Attribute attribute = Registry.ATTRIBUTE.get(key(string(a, "attribute", 100))); if (attribute == null) throw new IllegalArgumentException("Неизвестный attribute"); double amount = decimal(a, "amount", -100, 100); var operation = enumValue(AttributeModifier.Operation.class, optionalString(a, "operation", 40, "ADD_NUMBER")); meta.addAttributeModifier(attribute, new AttributeModifier(new NamespacedKey("mcc", "item_attribute_" + i++), amount, operation, org.bukkit.inventory.EquipmentSlotGroup.ANY)); } }
         item.setItemMeta(meta); return item;
     }
 
@@ -515,13 +519,13 @@ public final class GameService implements Listener, AutoCloseable {
         ItemMeta meta = item.getItemMeta();
         Map<String, Integer> enchantments = new TreeMap<>(); item.getEnchantments().forEach((e, level) -> enchantments.put(e.getKey().toString(), level));
         return map("material", item.getType().name(), "amount", item.getAmount(), "maxStackSize", item.getMaxStackSize(),
-                "name", meta.hasDisplayName() ? PlainTextComponentSerializer.plainText().serialize(meta.displayName()) : "",
-                "lore", meta.hasLore() ? meta.lore().stream().map(PlainTextComponentSerializer.plainText()::serialize).toList() : List.of(),
+                "name", meta.hasDisplayName() ? plain(meta.getDisplayName()) : "",
+                "lore", meta.hasLore() ? meta.getLore().stream().map(GameService::plain).toList() : List.of(),
                 "enchantments", enchantments, "damage", meta instanceof Damageable d ? d.getDamage() : 0, "unbreakable", meta.isUnbreakable());
     }
 
     private static String revision(Inventory inventory) {
-        try { MessageDigest digest = MessageDigest.getInstance("SHA-256"); for (int i = 0; i < inventory.getSize(); i++) { digest.update(ByteBuffer.allocate(4).putInt(i).array()); ItemStack stack = inventory.getItem(i); if (stack == null || stack.getType().isAir()) digest.update((byte) 0); else { byte[] bytes = stack.serializeAsBytes(); digest.update((byte) 1); digest.update(ByteBuffer.allocate(4).putInt(bytes.length).array()); digest.update(bytes); } } return HexFormat.of().formatHex(digest.digest()); }
+        try { MessageDigest digest = MessageDigest.getInstance("SHA-256"); for (int i = 0; i < inventory.getSize(); i++) { digest.update(ByteBuffer.allocate(4).putInt(i).array()); ItemStack stack = inventory.getItem(i); if (stack == null || stack.getType().isAir()) digest.update((byte) 0); else { byte[] bytes = ServerPlatform.itemBytes(stack); digest.update((byte) 1); digest.update(ByteBuffer.allocate(4).putInt(bytes.length).array()); digest.update(bytes); } } return HexFormat.of().formatHex(digest.digest()); }
         catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
     }
 
@@ -549,18 +553,19 @@ public final class GameService implements Listener, AutoCloseable {
     public static List<?> list(Map<String, Object> p, String key, int max) { if (!(p.get(key) instanceof List<?> list) || list.size() > max) throw new IllegalArgumentException(key + ": нужен список длиной до " + max); return list; }
     public static <E extends Enum<E>> E enumValue(Class<E> type, String value) { try { return Enum.valueOf(type, value.toUpperCase(Locale.ROOT)); } catch (IllegalArgumentException e) { throw new IllegalArgumentException("Недопустимое значение " + type.getSimpleName() + ": " + value); } }
     public static Map<String, Object> map(Object... pairs) { if (pairs.length % 2 != 0) throw new IllegalArgumentException("pairs"); Map<String, Object> map = new LinkedHashMap<>(); for (int i = 0; i < pairs.length; i += 2) map.put((String) pairs[i], pairs[i + 1]); return map; }
-    public static void requireMainThread() { if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Minecraft API must run on the Paper main thread"); }
-    private boolean muted(UUID id) { Long expiry = mutes.get(id); return muteLookup.test(id) || expiry != null && (expiry == 0 || expiry > System.currentTimeMillis()); }
+    public static void requireMainThread() { if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Minecraft API must run on the Bukkit main thread"); }
+    private static String plain(String value) { return value == null ? "" : ChatColor.stripColor(value); }
+    private boolean muted(UUID id) { if (externallyManaged()) return false; Long expiry = mutes.get(id); return muteLookup.test(id) || expiry != null && (expiry == 0 || expiry > System.currentTimeMillis()); }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onMapPlace(BlockPlaceEvent e) { mapEngine.invalidateTerrain(e.getBlock().getWorld().getName(),e.getBlock().getX(),e.getBlock().getZ()); }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onMapBreak(BlockBreakEvent e) { mapEngine.invalidateTerrain(e.getBlock().getWorld().getName(),e.getBlock().getX(),e.getBlock().getZ()); }
     @EventHandler(priority = EventPriority.MONITOR) public void onJoin(PlayerJoinEvent e) { Player p = e.getPlayer(); knownNames.put(p.getUniqueId(), p.getName()); joinedAt.put(p.getUniqueId(), System.currentTimeMillis()); events.accept("join", playerDto(p, false)); events.accept("trigger", map("trigger", "join", "uuid", p.getUniqueId().toString(), "world", p.getWorld().getName(), "name", p.getName())); }
     @EventHandler(priority = EventPriority.MONITOR) public void onQuit(PlayerQuitEvent e) { Player p = e.getPlayer(); events.accept("quit", map("uuid", p.getUniqueId().toString(), "name", p.getName(), "at", System.currentTimeMillis())); events.accept("trigger", map("trigger", "quit", "uuid", p.getUniqueId().toString(), "world", p.getWorld().getName(), "name", p.getName())); joinedAt.remove(p.getUniqueId()); frozen.remove(p.getUniqueId()); }
-    @EventHandler(priority = EventPriority.MONITOR) public void onDeath(PlayerDeathEvent e) { Player p = e.getPlayer(); events.accept("death", map("uuid", p.getUniqueId().toString(), "name", p.getName(), "at", System.currentTimeMillis())); events.accept("trigger", map("trigger", "death", "uuid", p.getUniqueId().toString(), "world", p.getWorld().getName(), "name", p.getName())); }
+    @EventHandler(priority = EventPriority.MONITOR) public void onDeath(PlayerDeathEvent e) { Player p = e.getEntity(); events.accept("death", map("uuid", p.getUniqueId().toString(), "name", p.getName(), "at", System.currentTimeMillis())); events.accept("trigger", map("trigger", "death", "uuid", p.getUniqueId().toString(), "world", p.getWorld().getName(), "name", p.getName())); }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onWeather(WeatherChangeEvent e) { Bukkit.getScheduler().runTask(plugin, () -> events.accept("world", worldDto(e.getWorld(), false))); }
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true) public void onMove(PlayerMoveEvent e) { if (frozen.contains(e.getPlayer().getUniqueId()) && (e.getFrom().getX() != e.getTo().getX() || e.getFrom().getY() != e.getTo().getY() || e.getFrom().getZ() != e.getTo().getZ())) { Location l = e.getFrom().clone(); l.setYaw(e.getTo().getYaw()); l.setPitch(e.getTo().getPitch()); e.setTo(l); } }
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true) public void onChat(AsyncChatEvent e) { UUID id = e.getPlayer().getUniqueId(); if (muted(id)) { e.setCancelled(true); Bukkit.getScheduler().runTask(plugin, () -> { Player p = Bukkit.getPlayer(id); if (p != null) p.sendMessage(Component.text("Чат временно заблокирован администратором.")); }); } }
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onChatRecorded(AsyncChatEvent e) { UUID id = e.getPlayer().getUniqueId(); String text = PlainTextComponentSerializer.plainText().serialize(e.message()); String name = knownNames.getOrDefault(id, id.toString()); Bukkit.getScheduler().runTask(plugin, () -> events.accept("chat", map("uuid", id.toString(), "name", name, "message", text, "at", System.currentTimeMillis(), "source", "minecraft"))); }
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true) public void onChat(AsyncPlayerChatEvent e) { UUID id = e.getPlayer().getUniqueId(); if (!externallyManaged() && muted(id)) { e.setCancelled(true); Bukkit.getScheduler().runTask(plugin, () -> { Player p = Bukkit.getPlayer(id); if (!externallyManaged() && p != null) p.sendMessage("Чат временно заблокирован администратором."); }); } }
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onChatRecorded(AsyncPlayerChatEvent e) { UUID id = e.getPlayer().getUniqueId(); String text = e.getMessage(); String name = knownNames.getOrDefault(id, id.toString()); Bukkit.getScheduler().runTask(plugin, () -> events.accept("chat", map("uuid", id.toString(), "name", name, "message", text, "at", System.currentTimeMillis(), "source", "minecraft"))); }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onClick(InventoryClickEvent e) { inventoryDirty.add(e.getWhoClicked().getUniqueId()); }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onDrag(InventoryDragEvent e) { inventoryDirty.add(e.getWhoClicked().getUniqueId()); }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onDrop(PlayerDropItemEvent e) { inventoryDirty.add(e.getPlayer().getUniqueId()); }

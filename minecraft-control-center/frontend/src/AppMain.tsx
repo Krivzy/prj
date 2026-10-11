@@ -2,7 +2,7 @@ import './PanelUsers.css';
 import {lazy, Suspense, useCallback, useEffect, useRef, useState} from 'react';
 import {motion, useReducedMotion} from 'motion/react';
 import {ApiError, execute, post, request, setAuth} from './api';
-import {AppContext} from './context';
+import {AppContext,useResource} from './context';
 import type {Page} from './context';
 import {connectLive, refreshLive, resetLive, useLive} from './live';
 import type {Auth} from './types';
@@ -14,6 +14,7 @@ import Shell, {Brand} from './Shell';
 import Login from './Login';
 import Account from './Account';
 import Dashboard from './Dashboard';
+import {RestartScreen,useServerRestart} from './ServerRestart';
 const Management = lazy(() => import('./Management'));
 type Toast = {id:number; text:string; error:boolean};
 type Confirmation = {text:string; resolve:(yes:boolean) => void};
@@ -31,6 +32,10 @@ export default function App() {
   const timers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const live = useLive();
   const reduce = useReducedMotion();
+  const restarting=useServerRestart();
+  const integrations=useResource<{items:{id:string}[]}>(auth?.authenticated&&['Owner','Admin'].includes(auth.user?.role??'')?'/api/integrations':null);
+  const integrationIds=integrations.data?.items.map(item=>item.id)??[];
+  useEffect(()=>{if(!auth?.authenticated||!['Owner','Admin'].includes(auth.user?.role??''))return;const timer=setInterval(()=>{if(!document.hidden)integrations.reload();},30000);return()=>clearInterval(timer);},[auth?.authenticated,auth?.user?.role]);
   const t = (ru:string,en:string) => lang === 'ru' ? ru : en;
   const notify = useCallback((text:string, error=false) => {
     const id = Date.now() + Math.random();
@@ -48,7 +53,7 @@ export default function App() {
   }
   function closeConfirm(yes:boolean) {activeConfirmation.current?.resolve(yes); activeConfirmation.current = null; setConfirmation(null);}
   function navigate(next:Page) {
-    if (!availablePages(auth?.user?.role ?? 'Viewer').some(item => item.id === next)) return;
+    if (!availablePages(auth?.user?.role ?? 'Viewer',integrationIds).some(item => item.id === next)) return;
     setPage(next);
     window.scrollTo({top:0, behavior:'instant'});
     requestAnimationFrame(() => document.getElementById('main')?.focus({preventScroll:true}));
@@ -76,8 +81,8 @@ export default function App() {
   }, [lang,notify]);
   useEffect(() => {document.title = `${pages.find(item => item.id === page)?.[lang] ?? 'MCC'} · Minecraft Control Center`;}, [page,lang,auth?.authenticated]);
   useEffect(() => {
-    if (auth?.authenticated && !availablePages(auth.user?.role ?? 'Viewer').some(item => item.id === page)) setPage('dashboard');
-  }, [auth?.authenticated,auth?.user?.role,page]);
+    if (auth?.authenticated && !availablePages(auth.user?.role ?? 'Viewer',integrationIds).some(item => item.id === page)) setPage('dashboard');
+  }, [auth?.authenticated,auth?.user?.role,page,integrationIds.join(',')]);
   async function action(name:string,params:Record<string,unknown>,danger?:string) {
     if (!canExecute(auth?.user?.role ?? 'Viewer',name)) throw new Error(t('Недостаточно прав','Permission denied'));
     let confirmed = false;
@@ -96,10 +101,11 @@ export default function App() {
     try {await post('/api/auth/logout',{}); setAuthState({setupRequired:false,authenticated:false}); setAuth({setupRequired:false,authenticated:false}); resetLive();}
     catch (reason) {notify(reason instanceof Error ? reason.message : String(reason),true);}
   }
+  if(restarting.restart)return <RestartScreen restart={restarting.restart} lang={lang} done={()=>{restarting.clear();resetLive();setAuth({authenticated:false,setupRequired:false});setAuthState(null);setPage('dashboard');setAuthRevision(v=>v+1);}}/>;
   if (!auth) return <main className="boot"><Brand/><span className="boot-cube"/><h1>{t('Открываем твой мир…','Opening your world…')}</h1>{authError ? <><p role="alert">{authError}</p><Button onClick={() => setAuthRevision(value => value+1)}>{t('Повторить','Retry')}</Button></> : <span className="pixel-loader"/>}</main>;
   if (!auth.authenticated) return <Login status={auth} onAuth={setAuthState} lang={lang} changeLang={() => setLang(value => value === 'ru' ? 'en' : 'ru')}/>;
   const role = auth.user?.role?.toLowerCase() ?? 'viewer';
-  return <AppContext.Provider value={{auth,lang,t,navigate,action,confirm,notify,readonly:role === 'viewer',administrator:['owner','admin'].includes(role),owner:role === 'owner'}}>
+  return <AppContext.Provider value={{auth,integrationIds,lang,t,navigate,action,confirm,notify,readonly:role === 'viewer',administrator:['owner','admin'].includes(role),owner:role === 'owner'}}>
     <Shell page={page} changeLang={() => setLang(value => value === 'ru' ? 'en' : 'ru')} profile={() => setProfile(true)} logout={() => void logout()}>
       <main id="main" className="main-content" tabIndex={-1}>
         {auth.defaultPassword&&<div className="default-password-note"><span>{t('Используется стартовый пароль. Смените его в профиле перед удалённым доступом.','You are using the initial password. Change it in your profile before remote access.')}</span><Button onClick={()=>setProfile(true)}>{t('Мой профиль','My account')}</Button></div>}

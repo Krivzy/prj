@@ -3,6 +3,9 @@ package dev.mcc;
 import dev.mcc.core.*;
 import dev.mcc.game.GameService;
 import dev.mcc.game.PunishmentEngine;
+import dev.mcc.game.OreMonitor;
+import dev.mcc.integration.IntegrationService;
+import dev.mcc.server.*;
 import dev.mcc.web.*;
 import org.bukkit.Bukkit;
 import org.bukkit.command.*;
@@ -19,6 +22,7 @@ public final class MccPlugin extends JavaPlugin {
     private volatile Automation automation;private volatile Backup backup;private volatile LogTail tail;private volatile PluginStage pluginStage;
     private volatile PluginCatalog pluginCatalog;private volatile List<Map<String,Object>> catalogPlugins=List.of();private String catalogMinecraftVersion;
     private GameService game;private MainThread main;private volatile PunishmentEngine punishments;
+    private volatile IntegrationService integrations;private OreMonitor oreMonitor;private KernelProfiles kernelProfiles;private RestartService restart;
     private ScheduledExecutorService background;
     private volatile Map<String,Object> latest=Map.of("status","starting");
     private volatile Map<String,Object> gameSnapshot=Map.of();
@@ -40,8 +44,14 @@ public final class MccPlugin extends JavaPlugin {
             bind=getConfig().getString("web.host","127.0.0.1");port=getConfig().getInt("web.port",8080);
             modules.put("chat",getConfig().getBoolean("modules.chat",true));modules.put("events",getConfig().getBoolean("modules.events",true));modules.put("automations",getConfig().getBoolean("modules.automations",true));modules.put("map",getConfig().getBoolean("modules.map",false));
             profile=getConfig().getString("performance.profile","balanced").toLowerCase(Locale.ROOT);if(!Set.of("eco","balanced","performance").contains(profile))profile="balanced";
-            main=new MainThread(this);game=new GameService(this,this::gameEvent);
-            catalogMinecraftVersion=Bukkit.getMinecraftVersion();catalogPlugins=List.copyOf(game.plugins());
+            if(Bukkit.getName().toLowerCase(Locale.ROOT).contains("folia"))throw new IllegalArgumentException("Folia region scheduling is not supported by this build; use a Bukkit main-thread kernel");
+            main=new MainThread(this);
+            integrations=new IntegrationService(this,main,(actor,write)->auth!=null&&auth.session(actor.id())==actor&&(write?actor.role().equals("Owner"):Set.of("Owner","Admin").contains(actor.role())));
+            game=new GameService(this,this::gameEvent);game.externalManaged(integrations.externalPunishments());
+            oreMonitor=new OreMonitor(this,getConfig().getConfigurationSection("ore-monitor"));oreMonitor.start();
+            Path serverRoot=Path.of("").toAbsolutePath().normalize();restart=new RestartService(serverRoot);
+            kernelProfiles=new KernelProfiles(serverRoot,getDataFolder().toPath(),new BukkitKernelRuntime(main),Boolean.getBoolean("mcc.launcher.profile-hook"));
+            catalogMinecraftVersion=ServerPlatform.minecraftVersion();catalogPlugins=List.copyOf(game.plugins());
             game.setConsoleAllowedCommands(new HashSet<>(getConfig().getStringList("console.allowed-commands")));
             background=Executors.newSingleThreadScheduledExecutor(r->{Thread t=new Thread(r,"MCC-Background");t.setDaemon(true);return t;});
             background.execute(this::initialize);
@@ -54,11 +64,13 @@ public final class MccPlugin extends JavaPlugin {
             db=new Database(getDataFolder().toPath().resolve("database.db"));if(stopping.get()){db.close();return;}
             boolean localOnly=java.net.InetAddress.getByName(bind).isLoopbackAddress()&&!getConfig().getBoolean("web.allow-lan",false)&&getConfig().getString("web.public-origin","").isBlank();
             auth=new Auth(db,getDataFolder().toPath(),getConfig().getBoolean("auth.bootstrap-admin",true),localOnly);realtime=new Realtime(auth);
-            punishments=new PunishmentEngine(this,db,main,this::gameEvent);punishments.start().get();
+            punishments=new PunishmentEngine(this,db,main,this::gameEvent);punishments.externalManaged(integrations.externalPunishments());punishments.start().get();
+            try{kernelProfiles.reconcileStartup().get(30,TimeUnit.SECONDS);}catch(Exception error){getLogger().warning("MCC kernel preset was not applied safely; use Settings to select Custom or review a compatible preset. "+error.getClass().getSimpleName());}
             List<Map<String,Object>> settings=db.documents("settings").get();if(!settings.isEmpty())loadSettings(settings.getFirst());
             Map<UUID,Long> mutes=new HashMap<>();for(Map<String,Object> mute:db.documents("mutes").get())if(mute.get("uuid") instanceof String uuid&&mute.get("expiresAt") instanceof Number expiry)mutes.put(UUID.fromString(uuid),expiry.longValue());
             Map<UUID,String> known=new HashMap<>();for(Map<String,Object> player:db.documents("known-players").get())if(player.get("uuid") instanceof String uuid&&player.get("name") instanceof String name)known.put(UUID.fromString(uuid),name);
             for(var mute:mutes.entrySet())if(mute.getValue()==0||mute.getValue()>System.currentTimeMillis()){
+                if(integrations.externalPunishments().getAsBoolean())continue;
                 if(!punishments.muted(mute.getKey()))punishments.importLegacyMute(mute.getKey(),known.getOrDefault(mute.getKey(),mute.getKey().toString()),mute.getValue()).get();
                 db.deleteDocument("mutes",mute.getKey().toString()).get();
             }
@@ -72,12 +84,13 @@ public final class MccPlugin extends JavaPlugin {
             getLogger().info("REST API: Ready");getLogger().info("WebSocket: Online");getLogger().info("Real-Time Engine: Active");getLogger().info("Performance Guard: Active");
             if(auth.setupRequired())getLogger().info("First Owner: open dashboard locally; setup token is in plugins/MinecraftControlCenter/.setup-token (private file)");
             background.scheduleWithFixedDelay(this::backgroundPulse,1,1,TimeUnit.SECONDS);
-        }catch(Exception error){getLogger().severe("MCC web subsystem unavailable: "+error.getClass().getSimpleName()+": "+error.getMessage());latest=Map.of("status","web_error","message","Check MCC startup logs");closeServices();}
+        }catch(Exception error){getLogger().severe("MCC web subsystem unavailable: "+error.getClass().getSimpleName()+": "+error.getMessage());latest=Map.of("status","web_error","message","Check MCC startup logs");stopping.set(true);Bukkit.getScheduler().runTask(this,()->{if(isEnabled())Bukkit.getPluginManager().disablePlugin(this);});}
     }
     private void capture(){
         if(stopping.get()||game==null)return;pulses++;
         int interval=profile.equals("eco")?5:profile.equals("performance")?1:2;
-        if(Bukkit.getTPS()[0]<18)interval=Math.max(interval,5);
+        if(ServerPlatform.lowTps())interval=Math.max(interval,5);
+        if(realtime==null||!realtime.subscribers("state"))interval=Math.max(interval,10);
         if(pulses%interval!=0&&!refresh.getAndSet(false))return;
         long start=System.nanoTime();try{gameSnapshot=game.snapshot();catalogPlugins=List.copyOf(game.plugins());}catch(Exception e){getLogger().warning("MCC snapshot failed: "+e.getClass().getSimpleName());}
         long nanos=System.nanoTime()-start;snapshotCount.incrementAndGet();snapshotNanos.addAndGet(nanos);
@@ -129,6 +142,10 @@ public final class MccPlugin extends JavaPlugin {
     public PluginStage pluginStage(){return pluginStage;}
     public PluginCatalog pluginCatalog(){PluginCatalog value=pluginCatalog;if(value==null)throw new IllegalStateException("Plugin catalog is not ready");return value;}
     public PunishmentEngine punishments(){return punishments;}
+    public IntegrationService integrations(){return integrations;}
+    public OreMonitor oreMonitor(){return oreMonitor;}
+    public KernelProfiles kernelProfiles(){return kernelProfiles;}
+    public RestartService restart(){return restart;}
     public Path backupServerProperties() throws Exception {
         Path source=Path.of("server.properties").toAbsolutePath().normalize();
         if(!Files.isRegularFile(source)||Files.size(source)>1024*1024)throw new IllegalStateException("Standard server.properties backup is unavailable; configure the server offline");
@@ -138,11 +155,11 @@ public final class MccPlugin extends JavaPlugin {
     }
     public List<?> consoleHistory(){return tail==null?List.of():tail.history();}
     public List<?> chatHistory(){return new ArrayList<>(chatHistory);}
-    public Map<String,Object> settings(){return Map.of("profile",profile,"modules",Map.copyOf(modules),"host",bind,"port",port,"performance",performance(),"limits",Map.of("websocketConnections",16,"httpQueue",128,"gameQueue",256,"spawnPerTick",5,"activeEvents",3),"restartRequired",List.of("web.host","web.port","web.public-origin","web.secure-cookie"));}
+    public Map<String,Object> settings(){return Map.of("profile",profile,"modules",Map.copyOf(modules),"host",bind,"port",port,"performance",performance(),"limits",Map.of("websocketConnections",16,"httpQueue",64,"gameQueue",256,"spawnPerTick",5,"activeEvents",3),"restartRequired",List.of("web.host","web.port","web.public-origin","web.secure-cookie"));}
     private Map<String,Object> performance(){
         Map<String,Object> data=new LinkedHashMap<>();long count=snapshotCount.get();data.put("snapshotTasks",count);data.put("snapshotMeanMs",count==0?0:snapshotNanos.get()/1e6/count);data.put("snapshotP95Ms",snapshotP95);data.put("method","Wall-clock main-thread snapshots and dispatched actions; CPU is entire JVM, not MCC alone");
         if(main!=null){MainThread.MapStats s=main.stats();data.put("gameQueue",s.pending());data.put("actionTasks",s.tasks());data.put("actionMeanMs",s.meanMs());data.put("actionMaxMs",s.maxMs());}
-        if(db!=null)data.putAll(db.stats());if(realtime!=null)data.putAll(realtime.stats());if(automation!=null)data.putAll(automation.stats());return data;
+        if(db!=null)data.putAll(db.stats());if(realtime!=null)data.putAll(realtime.stats());if(automation!=null)data.putAll(automation.stats());if(web!=null)data.putAll(web.stats());return data;
     }
     @SuppressWarnings("unchecked") private void loadSettings(Map<String,Object> body){
         String candidate=Json.text(body,"profile",profile);if(!Set.of("eco","balanced","performance").contains(candidate))throw new IllegalArgumentException("Unknown performance profile");profile=candidate;
@@ -156,13 +173,14 @@ public final class MccPlugin extends JavaPlugin {
         if(automation!=null)automation.enabled(module("automations"));main.await(()->{game.setEventsEnabled(module("events"));game.setMapEnabled(module("map"));return null;});if(!module("chat"))chatHistory.clear();refreshSoon();return settings();
     }
     private boolean command(CommandSender sender,Command command,String label,String[] args){
-        if(args.length>0&&Set.of("punish","revoke","history").contains(args[0].toLowerCase(Locale.ROOT))){if(punishments==null){sender.sendPlainMessage("Punishments are starting");return true;}return punishments.handleCommand(sender,args);}
-        if(!(sender instanceof ConsoleCommandSender)&&!sender.hasPermission("mcc.status")){sender.sendPlainMessage("No permission");return true;}
-        sender.sendPlainMessage("MCC: "+(web!=null?"online":"unavailable")+"; dashboard http://localhost:"+port+"; first setup token: plugins/MinecraftControlCenter/.setup-token");return true;
+        if(args.length>0&&Set.of("punish","revoke","history").contains(args[0].toLowerCase(Locale.ROOT))){if(punishments==null){sender.sendMessage("Punishments are starting");return true;}return punishments.handleCommand(sender,args);}
+        if(!(sender instanceof ConsoleCommandSender)&&!sender.hasPermission("mcc.status")){sender.sendMessage("No permission");return true;}
+        sender.sendMessage("MCC: "+(web!=null?"online":"unavailable")+"; dashboard http://localhost:"+port+"; first setup token: plugins/MinecraftControlCenter/.setup-token");return true;
     }
-    private void closeServices(){Automation a=automation;automation=null;if(a!=null)a.close();WebServer w=web;web=null;if(w!=null)w.close();PluginCatalog c=pluginCatalog;pluginCatalog=null;if(c!=null)c.close();PunishmentEngine p=punishments;punishments=null;if(p!=null)p.close();Realtime r=realtime;realtime=null;if(r!=null)r.close();Database d=db;db=null;if(d!=null)d.close();}
+    private void closeSafely(String name,Runnable close){try{close.run();}catch(Exception error){getLogger().warning("MCC cleanup failed for "+name+": "+error.getClass().getSimpleName());}}
+    private void closeServices(){Automation a=automation;automation=null;if(a!=null)closeSafely("automation",a::close);WebServer w=web;web=null;if(w!=null)closeSafely("web",w::close);PluginCatalog c=pluginCatalog;pluginCatalog=null;if(c!=null)closeSafely("catalog",c::close);PunishmentEngine p=punishments;punishments=null;if(p!=null)closeSafely("punishments",p::close);Realtime r=realtime;realtime=null;if(r!=null)closeSafely("realtime",r::close);Database d=db;db=null;if(d!=null)closeSafely("database",d::close);}
     @Override public void onDisable(){
-        stopping.set(true);Automation a=automation;automation=null;if(a!=null)a.close();if(main!=null)main.close();if(game!=null)game.close();Bukkit.getScheduler().cancelTasks(this);
+        stopping.set(true);if(kernelProfiles!=null)closeSafely("kernel presets",kernelProfiles::close);if(oreMonitor!=null)closeSafely("ore monitor",oreMonitor::close);IntegrationService integration=integrations;integrations=null;if(integration!=null)closeSafely("integrations",integration::close);Automation a=automation;automation=null;if(a!=null)closeSafely("automation",a::close);if(main!=null)closeSafely("main-thread queue",main::close);if(game!=null)closeSafely("game",game::close);Bukkit.getScheduler().cancelTasks(this);
         if(background!=null)background.shutdownNow();closeServices();getLogger().info("Minecraft Control Center stopped; resources released.");
     }
 }

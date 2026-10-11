@@ -60,3 +60,11 @@ CPU ниже измерен через Windows process times, в процент�
 Короткий normal-startup smoke после lifecycle guard (SHA `2ffa69ebc75d550372f264538b326b9a97dba0012f4a4699a7f8a91f3a021c6a`) дал snapshot mean/p95 0,263/0,316 ms, MSPT 0,163 ms, TPS около 20 и SQL errors 0. Это 20 секунд functional validation с возможными supplemental API actions, не строгий overhead benchmark. Конечный SHA и целевые lifecycle/HTTP проверки находятся в `verification/build.json`, `final-lifecycle.json`, `final-transport.json` и `supplemental.json`.
 
 Исходные сводки: `verification/baseline-summary.json`, `mcc-idle-summary.json`, `three-dashboard-summary.json`, `five-client-summary.json`, `environment.json`. История интерфейса показывает CPU всей JVM; показатели snapshot/action — wall-clock runtime instrumentation, SQL latency — время выполнения queued SQL work. Профили и ограничения уменьшают частоту snapshots при низком TPS; измерение не заменяет длительный profiler/soak test на конкретном сервере.
+
+## Ограничения памяти0.7
+
+История раньше читала все полные JSON-снимки (до8640 за24часа) и только затем выбирала360точек. Теперь SQL выбирает последние реальные точки временных корзин, не более361, до JSON parsing. Новые записи сохраняют только числовые показатели, а старые выбираются ограниченно без изменения исходных данных. Это representative samples, не среднее и не обещание сохранить каждый кратковременный пик.
+
+SQLite page cache2MiB, mmap отключён. Сжатые HTTP-ресурсы ограничены4MiB/64entries. HTTP queue64/4threads с idle timeout, Undertow2workers/1IO, pool limit32buffers×16KiB (512KiB pooled; активные/direct/thread-local allocations отдельно). Idle snapshots не чаще10s, ore immutable snapshot5s с bounded ledger/queue. Карта читает сохранённые region files в одном worker, не загружает chunk и не держит plugin tickets.
+
+Heap limit, committed/used Java heap и WorkingSet всей JVM — разные показатели. Minecraft worlds, ядро, плагины, GC/native buffers совместно занимают процесс; они не доказывают расход именно MCC. До/после нельзя выдавать за точный A/B при разной загрузке игроков. Production heap limit не снижается без измерения запаса.
