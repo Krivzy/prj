@@ -3,7 +3,7 @@ import type {SetStateAction} from 'react';
 import {request} from './api';
 import type {Auth} from './types';
 export type Page = 'dashboard' | 'players' | 'worlds' | 'map' | 'mobs' | 'events' | 'console' | 'chat' | 'automations' | 'backups' | 'plugins' | 'audit' | 'settings' | 'ores' | 'luckperms' | 'coreprotect' | 'advancedban';
-export type AppContextType = {auth: Auth; integrationIds:string[]; lang: 'ru' | 'en'; t: (ru: string, en: string) => string; navigate: (page: Page) => void; action: (name: string, params: Record<string, unknown>, danger?: string) => Promise<unknown>; confirm:(text:string)=>Promise<boolean>; notify: (text: string, error?: boolean) => void; readonly: boolean; administrator: boolean; owner: boolean};
+export type AppContextType = {auth: Auth; integrationIds:string[]; modules:Record<string,boolean>; lang: 'ru' | 'en'; t: (ru: string, en: string) => string; navigate: (page: Page) => void; action: (name: string, params: Record<string, unknown>, danger?: string) => Promise<unknown>; confirm:(text:string)=>Promise<boolean>; notify: (text: string, error?: boolean) => void; readonly: boolean; administrator: boolean; owner: boolean};
 export const AppContext = createContext<AppContextType | null>(null);
 export function useApp() {const context = useContext(AppContext); if (!context) throw new Error('Missing MCC context'); return context;}
 export function useResource<T>(path: string | null) {

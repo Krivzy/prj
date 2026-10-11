@@ -74,6 +74,7 @@ body{min-width:320px;background:var(--bg);line-height:1.5}button{font:inherit}h1
 .main-content .backup-table td:nth-child(3),.main-content .backup-table td:nth-child(4),.main-content .backup-table td:last-child{white-space:nowrap}
 .main-content .staged-table{min-width:640px}
 .main-content .audit-table{min-width:720px}
+.main-content .audit-table td:nth-child(1),.main-content .audit-table td:nth-child(4){white-space:nowrap;overflow-wrap:normal}
 .main-content .plugin-icon{background:#2e3c33;border-color:#52675a;color:#b8d7c1;border-radius:4px}
 .main-content .plugin-card p{font-size:13px;color:var(--muted)}
 .main-content .plugin-meta,.main-content .plugin-meta code{font-size:12px;line-height:1.5;color:#adbeaf}

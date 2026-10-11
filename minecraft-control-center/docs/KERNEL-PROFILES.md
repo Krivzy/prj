@@ -1,6 +1,6 @@
 # Kernel profiles
 
-MCC provides `custom`, `vanilla`, `vanilla-performance` and `optimized` profiles for an existing kernel. It does not replace kernel JARs, migrate worlds, run `/reload`, change exploit/security switches, or promise exact Mojang behavior. Paper itself documents that exact vanilla equivalence is not attainable. The default is **custom**: MCC leaves current kernel files byte-identical, including its preboot hook. The kernel can still rewrite its own formatting, defaults or timestamps during boot. MCC's own private profile metadata may be persisted when a user explicitly selects a mode.
+MCC provides `custom`, `vanilla`, `vanilla-performance`, `optimized` and `maximum-optimized` profiles for an existing kernel. It does not replace kernel JARs, migrate worlds, run `/reload`, change exploit/security switches, or promise exact Mojang behavior. Paper itself documents that exact vanilla equivalence is not attainable. The default is **custom**: MCC leaves current kernel files byte-identical, including its preboot hook. The kernel can still rewrite its own formatting, defaults or timestamps during boot. MCC's own private profile metadata may be persisted when a user explicitly selects a mode.
 
 ## Managed settings and compatibility
 
@@ -11,11 +11,11 @@ Configuration support is intentionally versioned and fails closed:
 | File/schema | Managed keys |
 | --- | --- |
 | `server.properties` with explicit valid distance keys | `view-distance`, `simulation-distance` |
-| `spigot.yml`, `config-version: 12` or `13` | distances, spawn radius, tick-inactive-villagers, nerf-spawner-mobs, item merge radius, seven entity activation categories in `world-settings.default` **and every existing per-world mapping** |
-| `config/paper-world-defaults.yml` and existing loaded-world `paper-world.yml`, `_version: 31` | redstone implementation, pathfinding update behavior, explosion lookup optimization, paced chunk saving, unload delay, horizontal-only item merge |
-| `purpur.yml`, `config-version: 49` | alternate keepalive disabled; TPS catchup enabled except for optimized |
+| `spigot.yml`, `config-version: 12` or `13` | distances, spawn radius, tick-inactive-villagers, nerf-spawner-mobs, item merge radius, bounded maximum entity collisions, seven entity activation categories in `world-settings.default` **and every existing per-world mapping** |
+| `config/paper-world-defaults.yml` and existing loaded-world `paper-world.yml`, `_version: 31` | redstone implementation, pathfinding update behavior, explosion lookup optimization, paced chunk saving, unload delay, horizontal-only item merge and `collisions.max-entity-collisions` |
+| `purpur.yml`, `config-version: 49` | alternate keepalive disabled; TPS catchup enabled except for optimized and maximum-optimized |
 
-Paper's schema 31 and Spigot's schema 13 were observed in the closed owned Paper 26.3 fixture. Purpur 49 is based on its official 26.2 branch. Structural parsing and unit fixtures cover all supported schemas; native Spigot/Purpur and arbitrary future schema compatibility are not claimed. Public runtime methods are detected against the **loaded** Bukkit `World` interface; compiling against Paper does not imply that Spigot provides its methods.
+Paper's schema 31 and Spigot's schema 13 were observed in the closed owned Paper 26.3 fixture. Purpur schema 49 was checked against the official `ver/26.3` configuration implementation and the isolated native Purpur fixture. Structural parsing and unit fixtures cover these supported schemas. The completed native Paper/Purpur 26.3 suite for 0.8 is described below; native Spigot and arbitrary future schema compatibility are not claimed. Public runtime methods are detected against the **loaded** Bukkit `World` interface; compiling against Paper does not imply that Spigot provides its methods.
 
 | Profile | View / simulation | Additional intent |
 | --- | --- | --- |
@@ -23,6 +23,11 @@ Paper's schema 31 and Spigot's schema 13 were observed in the closed owned Paper
 | vanilla | 10 / 10 | Activation throttling disabled in loaded entities, vanilla redstone, item merge 0.5, spawn radius 8, immediate unload, max 200 autosave chunks per tick |
 | vanilla-performance | 10 / 8 | Same managed behavior keys, with explosion lookup optimization, 10-second unload delay, max 24 autosave chunks per tick |
 | optimized | 8 / 6 | Activation ranges 32/32/64/16/16/32/32, spawn radius 6, item merge 2.5, Alternate Current redstone, pathfinding block updates disabled; farms/redstone and Purpur tick catchup can behave differently |
+| maximum-optimized | Existing per-world values retained | Activation ranges 16/16/32/8/8/16/16, spawn radius 4, item merge 3.0, max entity collisions 2, inactive villager ticking disabled and spawner AI disabled; retains optimized Paper/Purpur behavior switches |
+
+`maximum-optimized` excludes `server.properties` and all view/simulation-distance YAML keys from the plan, prelaunch reconcile and live setters. Current loaded-world distances therefore remain unchanged. Its entity throttling, collision, merging, villager, spawner and redstone choices alter gameplay; crowded farms, restocking and dust update order must be tested. Spigot has no supported redstone implementation key, so that optimization is explicitly skipped. It is a stronger tradeoff preset, not a claim of globally optimal settings.
+
+Every other managed preset restores max entity collisions to the documented default 8 in Spigot mappings and Paper/Purpur global/world overrides. Thus maximum→vanilla does not retain maximum-only collision throttling. Custom retains the current files.
 
 Performance gains are workload-dependent and have not been benchmarked. High full-vanilla activation/save limits can cost CPU/IO. Presets retain every setting outside this small allowlist, including plugin behavior, network/auth settings, world seed and unsupported exploit switches. `vanilla` therefore means this managed collection of vanilla-like settings. Missing typed scalar keys can be added to known mappings; incompatible scalar types, unknown config versions and unsupported layouts are refused.
 
@@ -74,7 +79,11 @@ All service methods return `CompletableFuture<Map<String,Object>>`; routing shou
 
 The standalone React/Vite `KernelProfiles` component can be embedded in the existing administration/settings page. Admin can inspect and Owner can mutate; it includes loading/error/empty/unsupported states, review/confirmation, pending restart and current per-world distances. Requests are on demand, with no automatic polling, renderer, or large config contents. Buttons use 44px targets and the existing modal focus trap. Server authorization and conflict guards remain authoritative.
 
-## Verified checks
+## 0.8 verification
+
+The coordinated exact-candidate build passed 269 Java, 78 Node and 11 Python tests, TypeScript, Vite and Shadow JAR assembly. The build includes collision-transition and typed-path regressions for Spigot plus Paper/Purpur defaults and world overrides. New profile regressions verify distance preservation in maximum plans, live application and offline drift restoration; the Spigot plan explicitly skips unsupported redstone configuration. Isolated native Paper 26.3 build 169 and Purpur 26.3 build 2647 both passed all five profile kinds/six applications, including maximum→vanilla, six requested normal restarts and a final observed normal exit 0. Their prelaunch hooks restored managed file drift before kernel startup, source conflicts rejected before writes, and private backups matched the exact planned before hashes. Maximum retained the tested per-world view/simulation distances of 8/6; returning to vanilla restored max-entity-collisions from 2 to 8 in Spigot, Paper defaults and all three world overrides. Custom applied zero kernel file edits and preserved manual server.properties values 5/4; inherited per-world YAML overrides retained actual runtime distances 10/10. This is a distinction between file values and world overrides, not a claim that Custom forces distances. Production has not received these profiles through the native fixtures. Native Spigot remains untested, and the official Purpur build is labelled experimental.
+
+## Historical 0.7 checks
 
 The assembled Gradle test XML on 2026-10-11 records 25 profile/config/public-distance unit tests (16 profile, 5 config, 4 distance) plus 7 restart tests, with zero failures, errors or skipped tests. The whole Java suite records 215 passing tests. Profile regressions cover default/custom byte preservation, per-world merges, source conflicts, actor/TTL/authority, exact rollback on Owner loss, unknown schemas/kernels, Spigot without setters, visible live failure, late-startup drift, offline prelaunch lease/identity, typed YAML hazards and partial live rollback. Three Node helper tests and `tsc -b` passed. No preset was applied to production and no benchmark/native kernel preset claim is made by these checks.
 
@@ -86,5 +95,5 @@ The assembled Gradle test XML on 2026-10-11 records 25 profile/config/public-dis
 - [Paper 26.3 World public API](https://jd.papermc.io/paper/26.3/org/bukkit/World.html)
 - [Spigot configuration reference](https://www.spigotmc.org/wiki/spigot-configuration/)
 - [Spigot World public API](https://hub.spigotmc.org/javadocs/spigot/org/bukkit/World.html)
-- [Purpur 26.2 config implementation](https://github.com/PurpurMC/Purpur/blob/ver/26.2/purpur-server/src/main/java/org/purpurmc/purpur/PurpurConfig.java)
+- [Purpur 26.3 config implementation](https://github.com/PurpurMC/Purpur/blob/ver/26.3/purpur-server/src/main/java/org/purpurmc/purpur/PurpurConfig.java)
 - [Paper migration/layout constraints](https://docs.papermc.io/paper/migration/)

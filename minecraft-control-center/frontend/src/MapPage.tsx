@@ -2,6 +2,7 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {request} from './api';
 import {formatNumber, useApp} from './context';
 import {useLive} from './live';
+import {imageMapWork} from './module-view';
 import {GameImage} from './assets';
 import {Button, ErrorBox, Icon} from './ui';
 import {fitImage, panImage, projectImage, sameMarkers, screenPoint, unprojectImage, visibleImages, zoomImage} from './saved-image-map';
@@ -34,7 +35,8 @@ function CachedTile({world, level, x, y, revision, style}: {world: string; level
 }
 
 export default function MapPage() {
-  const {t} = useApp(), live = useLive();
+  const {t,modules} = useApp(), live = useLive();
+  const mapWork=imageMapWork(modules);
   const worlds = live.snapshot?.worlds ?? [], [worldName, setWorldName] = useState('');
   const world = worlds.find(w => w.name === worldName) ?? worlds[0];
   const name = world?.name ?? '', worldId = world?.uuid ?? '';
@@ -67,7 +69,7 @@ export default function MapPage() {
   }, [worldId, release]);
 
   useEffect(() => {
-    if (!name) return;
+    if (!name||!mapWork.base){setManifest(null);setLoading(false);setError('');return;}
     let active = true, timer = 0, controller: AbortController | null = null;
     const schedule = (ms: number) => {clearTimeout(timer); if (active && !document.hidden) timer = window.setTimeout(load, ms);};
     async function load() {
@@ -82,10 +84,10 @@ export default function MapPage() {
     const visibility = () => {clearTimeout(timer); if (document.hidden) {controller?.abort(); release();} else schedule(100);};
     document.addEventListener('visibilitychange', visibility); schedule(0);
     return () => {active = false; clearTimeout(timer); controller?.abort(); document.removeEventListener('visibilitychange', visibility);};
-  }, [name, worldId, reload, release]);
+  }, [name, worldId, reload, release,mapWork.base]);
 
   useEffect(() => {
-    if (!name) return;
+    if (!name||!mapWork.players){setPlayers([]);setPlayerError('');return;}
     let active = true, timer = 0, controller: AbortController | null = null;
     const schedule = (ms: number) => {clearTimeout(timer); if (active && !document.hidden) timer = window.setTimeout(load, ms);};
     async function load() {
@@ -100,7 +102,7 @@ export default function MapPage() {
     const visibility = () => {clearTimeout(timer); if (document.hidden) controller?.abort(); else schedule(100);};
     document.addEventListener('visibilitychange', visibility); schedule(0);
     return () => {active = false; clearTimeout(timer); controller?.abort(); document.removeEventListener('visibilitychange', visibility);};
-  }, [name, worldId, reload]);
+  }, [name, worldId, reload,mapWork.players]);
 
   useEffect(() => {
     const state = fitting.current;

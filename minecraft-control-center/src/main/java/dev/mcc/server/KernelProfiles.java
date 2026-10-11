@@ -27,9 +27,10 @@ public final class KernelProfiles implements AutoCloseable {
         CompletableFuture<List<Map<String,Object>>> applyDistances(int view,int simulation,BooleanSupplier authority);
     }
     public enum Profile {
-        CUSTOM("custom",0,0), VANILLA("vanilla",10,10), VANILLA_PERFORMANCE("vanilla-performance",10,8), OPTIMIZED("optimized",8,6);
+        CUSTOM("custom",0,0), VANILLA("vanilla",10,10), VANILLA_PERFORMANCE("vanilla-performance",10,8), OPTIMIZED("optimized",8,6), MAXIMUM_OPTIMIZED("maximum-optimized",0,0);
         final String id;final int view,simulation;
         Profile(String id,int view,int simulation){this.id=id;this.view=view;this.simulation=simulation;}
+        boolean preservesDistances(){return this==CUSTOM||this==MAXIMUM_OPTIMIZED;}
         static Profile parse(String id){for(Profile p:values())if(p.id.equals(id))return p;throw new IllegalArgumentException("Unknown kernel profile");}
     }
     private record Target(String relative,KernelConfigFiles.Kind kind,List<KernelConfigFiles.Edit> edits) {}
@@ -89,7 +90,7 @@ public final class KernelProfiles implements AutoCloseable {
             String backup=commit(root,data,stateFile,p.stateSha,p.files,next,()->{permit(authority);return true;});
             List<Map<String,Object>> live=List.of();String liveError="";
             // Files are a durable, intentional next-boot configuration. A public API failure is visible, never a fake live success.
-            if(p.profile!=Profile.CUSTOM&&now.liveDistances&&knownKernel(now.kernel)){
+            if(!p.profile.preservesDistances()&&now.liveDistances&&knownKernel(now.kernel)){
                 try{live=await(runtime.applyDistances(p.profile.view,p.profile.simulation,()->!closed&&authority.getAsBoolean()));}
                 catch(Exception e){liveError="Live distance change failed; inspect actual distances before restarting the saved profile";}
             }
@@ -106,7 +107,7 @@ public final class KernelProfiles implements AutoCloseable {
             List<Prepared> files=prepare(root,snapshot,profile);boolean drift=files.stream().anyMatch(f->!f.changes.isEmpty());
             Map<String,Object> next=state(profile,snapshot,String.valueOf(selected.getOrDefault("selectedBy","startup")),clock.millis());next.put("pendingRestart",drift);
             commit(root,data,stateFile,stored.sha,files,next,()->{if(closed)throw new CancellationException("MCC stopped");return true;});
-            if(snapshot.liveDistances)await(runtime.applyDistances(profile.view,profile.simulation,()->!closed));
+            if(!profile.preservesDistances()&&snapshot.liveDistances)await(runtime.applyDistances(profile.view,profile.simulation,()->!closed));
             startupMessage=drift?"Managed settings were restored after the kernel read its files; restart is required":"";
             return status0(await(runtime.snapshot()));
         }
@@ -117,10 +118,15 @@ public final class KernelProfiles implements AutoCloseable {
         boolean supported=knownKernel(snapshot.kernel);String reason="";List<Map<String,Object>> files=new ArrayList<>();
         if(supported){try{for(Target target:targets(root,snapshot,Profile.VANILLA)){Path file=resolve(root,target.relative);byte[] bytes=bounded(file,KernelConfigFiles.MAX_BYTES);KernelConfigFiles.merge(target.kind,bytes,target.edits);files.add(map("path",target.relative,"sha256",sha(bytes)));}}catch(IOException|IllegalArgumentException e){supported=false;reason=e.getMessage();}}
         else reason="Unknown or unsupported kernel; custom/files mode is preserved";
-        List<Map<String,Object>> profiles=new ArrayList<>();for(Profile p:Profile.values())profiles.add(map("id",p.id,"available",p==Profile.CUSTOM||supported,"managed",p!=Profile.CUSTOM,"viewDistance",p==Profile.CUSTOM?null:p.view,"simulationDistance",p==Profile.CUSTOM?null:p.simulation));
+        List<Map<String,Object>> profiles=new ArrayList<>();for(Profile p:Profile.values())profiles.add(map("id",p.id,"available",p==Profile.CUSTOM||supported,"managed",p!=Profile.CUSTOM,"viewDistance",p.preservesDistances()?null:p.view,"simulationDistance",p.preservesDistances()?null:p.simulation,"preservesDistances",p.preservesDistances()));
         return map("kernel",snapshot.kernel,"minecraftVersion",snapshot.minecraftVersion,"profile",id,"managed",!id.equals("custom"),"pendingRestart",Boolean.TRUE.equals(selected.get("pendingRestart")),"revision",stored.sha,"capabilities",map("managedFiles",supported,"liveDistances",supported&&snapshot.liveDistances,"startupHookConfigured",startupHook,"startupReapply",startupHook?"before-kernel":"after-kernel-read","reason",reason),"profiles",profiles,"files",files,"warnings",warnings(snapshot,startupHook),"startupMessage",startupMessage,"worlds",snapshot.worlds.stream().map(w->map("name",w.name,"viewDistance",w.viewDistance,"simulationDistance",w.simulationDistance)).toList());
     }
-    private static Map<String,Object> planDto(Plan p){List<Map<String,Object>> files=new ArrayList<>();for(Prepared f:p.files)files.add(map("path",f.target.relative,"beforeSha256",sha(f.before),"afterSha256",sha(f.after),"changes",f.changes));return map("planId",p.id,"profile",p.profile.id,"expiresAt",p.expires,"files",files,"liveDistances",p.profile!=Profile.CUSTOM&&p.runtime.liveDistances,"pendingRestart",p.files.stream().anyMatch(f->!f.changes.isEmpty()),"customPreservesFiles",p.profile==Profile.CUSTOM);}
+    private static Map<String,Object> planDto(Plan p){List<Map<String,Object>> files=new ArrayList<>();for(Prepared f:p.files)files.add(map("path",f.target.relative,"beforeSha256",sha(f.before),"afterSha256",sha(f.after),"changes",f.changes));return map("planId",p.id,"profile",p.profile.id,"expiresAt",p.expires,"files",files,"liveDistances",!p.profile.preservesDistances()&&p.runtime.liveDistances,"preservesDistances",p.profile.preservesDistances(),"pendingRestart",p.files.stream().anyMatch(f->!f.changes.isEmpty()),"customPreservesFiles",p.profile==Profile.CUSTOM,"tradeoffs",tradeoffs(p.profile,p.runtime));}
+    private static List<String> tradeoffs(Profile profile,RuntimeState runtime){
+        if(profile!=Profile.MAXIMUM_OPTIMIZED)return List.of();
+        List<String> out=new ArrayList<>(List.of("Current view and simulation distances are preserved in properties, world overrides and the live API.","Reduced entity activation, inactive villager ticking disabled and spawner AI disabled can change farms and villager restocking.","A shorter spawn radius, larger item merging and fewer entity collisions change gameplay near crowded farms."));
+        out.add(runtime.kernel.equalsIgnoreCase("spigot")?"Spigot has no supported redstone implementation setting; that optimization is skipped.":"Alternate Current changes redstone dust update order. Existing circuits may behave differently; test them before adoption.");return List.copyOf(out);
+    }
     private static List<String> warnings(RuntimeState runtime,boolean hook){List<String> out=new ArrayList<>();out.add("Vanilla means the managed vanilla-like settings, not exact Mojang behavior; plugins and unsupported exploits are untouched.");out.add("Managed YAML is merged semantically; comments and formatting may be normalized. Exact original bytes are backed up privately.");out.add("Optimized changes entity activation, spawn radius and redstone behavior; benchmark your farms before adopting it.");if(!runtime.liveDistances)out.add("This kernel lacks public per-world distance setters; distance changes require restart.");if(!hook)out.add("No prelaunch hook is configured; startup file drift is restored after kernel initialization and remains pending-restart.");return List.copyOf(out);}
     private static Map<String,Object> state(Profile p,RuntimeState r,String actor,long at){return map("schema",1,"profile",p.id,"kernel",r.kernel,"minecraftVersion",r.minecraftVersion,"selectedBy",actor,"selectedAt",at,"worldFolders",r.worlds.stream().map(w->w.folder.toAbsolutePath().normalize().toString()).toList());}
     private static boolean sameRuntime(RuntimeState a,RuntimeState b){return a.kernel.equals(b.kernel)&&a.minecraftVersion.equals(b.minecraftVersion)&&a.worlds.stream().map(w->w.folder.toAbsolutePath().normalize()).toList().equals(b.worlds.stream().map(w->w.folder.toAbsolutePath().normalize()).toList());}
@@ -134,20 +140,20 @@ public final class KernelProfiles implements AutoCloseable {
     }
     private static List<Target> targets(Path root,RuntimeState r,Profile p)throws IOException {
         if(p==Profile.CUSTOM)return List.of();if(!knownKernel(r.kernel))throw new IOException("Unsupported kernel");
-        List<Target> out=new ArrayList<>();out.add(new Target("server.properties",KernelConfigFiles.Kind.PROPERTIES,List.of(edit(p.view,"view-distance"),edit(p.simulation,"simulation-distance"))));
+        List<Target> out=new ArrayList<>();if(!p.preservesDistances())out.add(new Target("server.properties",KernelConfigFiles.Kind.PROPERTIES,List.of(edit(p.view,"view-distance"),edit(p.simulation,"simulation-distance"))));
         Path spigot=resolve(root,"spigot.yml");Map<String,Object> spigotData=KernelConfigFiles.readYaml(KernelConfigFiles.Kind.SPIGOT,bounded(spigot,KernelConfigFiles.MAX_BYTES));
         Object settings=spigotData.get("world-settings");if(!(settings instanceof Map<?,?> worlds)||worlds.size()>129)throw new IOException("Unsupported Spigot world-settings layout");
         Set<String> names=new LinkedHashSet<>();names.add("default");for(Object key:worlds.keySet())if(key instanceof String name)names.add(name);else throw new IOException("Unsupported Spigot world name");
-        List<KernelConfigFiles.Edit> edits=new ArrayList<>();boolean optimized=p==Profile.OPTIMIZED;
+        List<KernelConfigFiles.Edit> edits=new ArrayList<>();boolean maximum=p==Profile.MAXIMUM_OPTIMIZED,optimized=p==Profile.OPTIMIZED||maximum;
         for(String world:names){String[] base={"world-settings",world};
-            edits.add(edit(p.view,base,"view-distance"));edits.add(edit(p.simulation,base,"simulation-distance"));edits.add(edit(optimized?6:8,base,"mob-spawn-range"));
-            edits.add(edit(true,base,"tick-inactive-villagers"));edits.add(edit(false,base,"nerf-spawner-mobs"));edits.add(edit(optimized?2.5:0.5,base,"merge-radius","item"));
-            String[] categories={"animals","monsters","raiders","misc","water","villagers","flying-monsters"};int[] ranges={32,32,64,16,16,32,32};
+            if(!p.preservesDistances()){edits.add(edit(p.view,base,"view-distance"));edits.add(edit(p.simulation,base,"simulation-distance"));}edits.add(edit(maximum?4:optimized?6:8,base,"mob-spawn-range"));
+            edits.add(edit(!maximum,base,"tick-inactive-villagers"));edits.add(edit(maximum,base,"nerf-spawner-mobs"));edits.add(edit(maximum?3.0:optimized?2.5:0.5,base,"merge-radius","item"));edits.add(edit(maximum?2:8,base,"max-entity-collisions"));
+            String[] categories={"animals","monsters","raiders","misc","water","villagers","flying-monsters"};int[] ranges=maximum?new int[]{16,16,32,8,8,16,16}:new int[]{32,32,64,16,16,32,32};
             for(int i=0;i<categories.length;i++)edits.add(edit(optimized?ranges[i]:0,base,"entity-activation-range",categories[i]));
         }
         out.add(new Target("spigot.yml",KernelConfigFiles.Kind.SPIGOT,List.copyOf(edits)));
         if(!r.kernel.equalsIgnoreCase("spigot")){
-            List<KernelConfigFiles.Edit> paper=List.of(edit(optimized?"ALTERNATE_CURRENT":"VANILLA","misc","redstone-implementation"),edit(!optimized,"misc","update-pathfinding-on-block-update"),edit(p!=Profile.VANILLA,"environment","optimize-explosions"),edit(p==Profile.VANILLA?200:24,"chunks","max-auto-save-chunks-per-tick"),edit(p==Profile.VANILLA?"0s":"10s","chunks","delay-chunk-unloads-by"),edit(!optimized,"entities","behavior","only-merge-items-horizontally"));
+            List<KernelConfigFiles.Edit> paper=List.of(edit(optimized?"ALTERNATE_CURRENT":"VANILLA","misc","redstone-implementation"),edit(!optimized,"misc","update-pathfinding-on-block-update"),edit(p!=Profile.VANILLA,"environment","optimize-explosions"),edit(p==Profile.VANILLA?200:24,"chunks","max-auto-save-chunks-per-tick"),edit(p==Profile.VANILLA?"0s":"10s","chunks","delay-chunk-unloads-by"),edit(!optimized,"entities","behavior","only-merge-items-horizontally"),edit(maximum?2:8,"collisions","max-entity-collisions"));
             out.add(new Target("config/paper-world-defaults.yml",KernelConfigFiles.Kind.PAPER,paper));Set<Path> seen=new HashSet<>();
             for(WorldState world:r.worlds){Path folder=world.folder.toAbsolutePath().normalize();if(!folder.startsWith(root))throw new IOException("World configuration is outside server directory");Path file=folder.resolve("paper-world.yml");if(Files.exists(file,LinkOption.NOFOLLOW_LINKS)&&seen.add(file)){String relative=root.relativize(file).toString().replace('\\','/');out.add(new Target(relative,KernelConfigFiles.Kind.PAPER,paper));}}
         }

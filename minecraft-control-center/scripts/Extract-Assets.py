@@ -2,6 +2,7 @@
 import argparse, hashlib, json, struct, zipfile
 from pathlib import Path
 from asset_head_uv import ghast_head
+from asset_model_geometry import model_geometry
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description="Extract UI textures from your legally installed Minecraft 26.3 client and verified local language cache.")
@@ -72,6 +73,19 @@ with zipfile.ZipFile(CLIENT) as archive:
         if not image:
             return None
         result = {'image': image}
+        geometry = model_geometry(obj, lambda value: texture(value, textures))
+        if geometry:
+            for element in geometry['elements']:
+                for face in element['faces'].values():
+                    source = 'assets/minecraft/' + face['texture'].removeprefix('/game-assets/')
+                    animation = read_json(source + '.mcmeta').get('animation')
+                    if animation:
+                        width, height = struct.unpack('>II', archive.read(source)[16:24])
+                        frame_height = animation.get('height', min(width, height))
+                        face['textureHeight'] = height / frame_height * 16
+                        first = animation.get('frames', [0])[0]
+                        face['frameIndex'] = first.get('index', 0) if isinstance(first, dict) else first
+            result['model'] = geometry
         if faces:
             result['faces'] = faces
         source = image.removeprefix('/game-assets/')
@@ -182,7 +196,20 @@ with zipfile.ZipFile(CLIENT) as archive:
         labels[lang[:2]] = {}
         for kind, category, prefix in [('items', items, 'item'),('blocks',blocks,'block'),('mobs',mobs,'entity'),('effects',effects,'effect'),('enchantments',enchantments,'enchantment')]:
             labels[lang[:2]][kind] = {key:table.get(prefix + '.' + key.replace(':','.'),table.get('block.' + key.replace(':','.'),key.split(':')[-1].replace('_',' '))) for key in category}
-    manifest = {'version': '26.3', 'sourceSha1': EXPECTED, 'items': items, 'blocks': blocks, 'mobs': mobs, 'effects': effects, 'enchantments': enchantments, 'names':labels, 'art': {'hero': '/game-assets/art/hero.png'}}
+    # Share identical item/block models in browser memory and in the manifest payload.
+    models = {}
+    for category in (items, blocks):
+        for value in category.values():
+            geometry = value.get('model') if isinstance(value, dict) else None
+            if not geometry:
+                continue
+            raw = json.dumps(geometry, sort_keys=True, separators=(',', ':')).encode('utf8')
+            key = hashlib.sha256(raw).hexdigest()[:16]
+            if key in models and models[key] != geometry:
+                raise RuntimeError('Model digest collision')
+            models[key] = geometry
+            value['model'] = key
+    manifest = {'version': '26.3', 'sourceSha1': EXPECTED, 'items': items, 'blocks': blocks, 'models': models, 'mobs': mobs, 'effects': effects, 'enchantments': enchantments, 'names':labels, 'art': {'hero': '/game-assets/art/hero.png'}}
     (OUT / 'catalog.json').write_text(json.dumps(manifest, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
     report = {'clientVersion': '26.3', 'clientSha1': EXPECTED, 'assetIndexSha1': metadata['assetIndex']['sha1'], 'russianLanguageSha1': language_entry['hash'], 'unmodifiedTextures': copied, 'itemIcons': len(items), 'blockIcons': len(blocks), 'effectIcons': len(effects), 'enchantmentIcons': len(enchantments), 'mobTextureEntries': len(mobs), 'missingSpecialItemModels': missing}
     (ROOT / 'docs/ASSET-REPORT.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')

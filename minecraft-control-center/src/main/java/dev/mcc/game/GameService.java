@@ -50,6 +50,8 @@ public final class GameService implements Listener, AutoCloseable {
     private BiConsumer<UUID, Map<String, Object>> moderationPersistence = (uuid, state) -> {};
     private volatile java.util.function.Predicate<UUID> muteLookup = uuid -> false;
     private volatile BooleanSupplier externalManaged = () -> false;
+    private volatile BooleanSupplier captureChat=()->true,capturePlayers=()->true,captureEntities=()->true;
+    private boolean snapshotPlayers=true,snapshotEntities=true,snapshotMetrics=true;
     private Set<String> consoleAllowed = Set.of("list", "say", "time", "weather", "difficulty", "seed", "help", "version", "plugins");
     private boolean closed;
     private int ticks;
@@ -70,6 +72,9 @@ public final class GameService implements Listener, AutoCloseable {
     }
     public void setMuteLookup(java.util.function.Predicate<UUID> lookup) { requireMainThread(); muteLookup=Objects.requireNonNull(lookup); }
     public void externalManaged(BooleanSupplier supplier) { requireMainThread(); externalManaged = Objects.requireNonNull(supplier); }
+    public void setCaptureModules(BooleanSupplier chat,BooleanSupplier players,BooleanSupplier entities){requireMainThread();captureChat=Objects.requireNonNull(chat);capturePlayers=Objects.requireNonNull(players);captureEntities=Objects.requireNonNull(entities);if(!capture(capturePlayers))inventoryDirty.clear();}
+    public void setSnapshotModules(boolean players,boolean entities,boolean metrics){requireMainThread();snapshotPlayers=players;snapshotEntities=entities;snapshotMetrics=metrics;if(!players)inventoryDirty.clear();if(!entities)spawnJobs.clear();}
+    private static boolean capture(BooleanSupplier supplier){try{return supplier.getAsBoolean();}catch(RuntimeException error){return false;}}
     private boolean externallyManaged() { try { return externalManaged.getAsBoolean(); } catch (RuntimeException error) { return true; } }
 
     public void restoreMutes(Map<UUID, Long> restored) {
@@ -108,16 +113,20 @@ public final class GameService implements Listener, AutoCloseable {
         requireMainThread();
         Runtime runtime = Runtime.getRuntime();
         List<Map<String, Object>> worlds = Bukkit.getWorlds().stream().map(w -> worldDto(w, false)).toList();
-        int entities = worlds.stream().mapToInt(w -> ((Number) w.get("entityCount")).intValue()).sum();
-        int chunks = worlds.stream().mapToInt(w -> ((Number) w.get("loadedChunks")).intValue()).sum();
-        double[] tps = ServerPlatform.tps();
-        return map("timestamp", System.currentTimeMillis(), "serverName", ServerPlatform.brand(), "version", Bukkit.getVersion(),
-                "minecraftVersion", ServerPlatform.minecraftVersion(), "online", Bukkit.getOnlinePlayers().size(), "maxPlayers", Bukkit.getMaxPlayers(),
-                "tps", Arrays.stream(tps).boxed().toList(), "mspt", ServerPlatform.mspt(), "platformMetrics", ServerPlatform.metrics(),
+        int entities = snapshotEntities?worlds.stream().mapToInt(w -> ((Number) w.get("entityCount")).intValue()).sum():0;
+        int chunks = snapshotMetrics?worlds.stream().mapToInt(w -> ((Number) w.get("loadedChunks")).intValue()).sum():0;
+        double[] tps = snapshotMetrics?ServerPlatform.tps():new double[0];
+        Map<String,Object> result=map("timestamp", System.currentTimeMillis(), "serverName", ServerPlatform.brand(), "version", Bukkit.getVersion(),
+                "minecraftVersion", ServerPlatform.minecraftVersion(), "online", snapshotPlayers?Bukkit.getOnlinePlayers().size():0, "maxPlayers", Bukkit.getMaxPlayers(),
+                "tps", Arrays.stream(tps).boxed().toList(), "mspt", snapshotMetrics?ServerPlatform.mspt():null, "platformMetrics", snapshotMetrics?ServerPlatform.metrics():null,
                 "uptimeSeconds", ManagementFactory.getRuntimeMXBean().getUptime() / 1000, "heapUsed", runtime.totalMemory() - runtime.freeMemory(),
                 "heapMax", runtime.maxMemory(), "cpu", null, "loadedChunks", chunks, "entityCount", entities,
-                "worldCount", worlds.size(), "worlds", worlds, "activeEvents", activeEvents(), "pendingSpawnBatches", spawnJobs.size(), "performanceGuard", ServerPlatform.performanceGuard(),
+                "worldCount", worlds.size(), "worlds", worlds, "activeEvents", activeEvents(), "pendingSpawnBatches", spawnJobs.size(), "performanceGuard", snapshotMetrics?ServerPlatform.performanceGuard():null,
                 "motd", plain(Bukkit.getMotd()), "whitelist", Bukkit.hasWhitelist(), "viewDistance", Bukkit.getViewDistance(), "simulationDistance", Bukkit.getSimulationDistance());
+        if(!snapshotEntities)result.remove("entityCount");
+        if(!snapshotPlayers)result.remove("online");
+        if(!snapshotMetrics)for(String key:List.of("tps","mspt","platformMetrics","heapUsed","heapMax","cpu","performanceGuard","loadedChunks"))result.remove(key);
+        return result;
     }
 
     public List<Map<String, Object>> players() {
@@ -176,8 +185,11 @@ public final class GameService implements Listener, AutoCloseable {
         Location center = w.getWorldBorder().getCenter();
         Map<String, Object> out = map("name", w.getName(), "uuid", w.getUID().toString(), "environment", w.getEnvironment().name(),
                 "time", w.getTime(), "fullTime", w.getFullTime(), "weather", w.isThundering() ? "thunder" : w.hasStorm() ? "rain" : "clear", "difficulty", w.getDifficulty().name(),
-                "pvp", w.getPVP(), "loadedChunks", w.getLoadedChunks().length, "entityCount", ServerPlatform.entityCount(w), "players", w.getPlayers().size(),
+                "pvp", w.getPVP(),
                 "border", map("size", w.getWorldBorder().getSize(), "x", center.getX(), "z", center.getZ()), "spawn", locationDto(w.getSpawnLocation()));
+        if(snapshotEntities)out.put("entityCount",ServerPlatform.entityCount(w));
+        if(snapshotPlayers)out.put("players",w.getPlayers().size());
+        if(snapshotMetrics)out.put("loadedChunks",w.getLoadedChunks().length);
         out.put("viewDistance", w.getViewDistance()); out.put("simulationDistance", w.getSimulationDistance());
         if (detailed) {
             Map<String, Object> rules = new TreeMap<>();
@@ -200,7 +212,7 @@ public final class GameService implements Listener, AutoCloseable {
             List<Map<String, Object>> ench = Registry.ENCHANTMENT.stream().map(e -> map("key", e.getKey().toString(), "maxLevel", e.getMaxLevel())).toList();
             catalogCache = map("materials", materials, "mobs", mobs, "effects", Registry.EFFECT.stream().map(e -> e.getKey().toString()).toList(),
                     "enchantments", ench, "sounds", Registry.SOUNDS.stream().map(sound -> sound.getKey().toString()).toList(), "attributes", Registry.ATTRIBUTE.stream().map(a -> a.getKey().toString()).toList(),
-                    "eventPresets", List.of("waves", "fireworks", "lightning", "treasure", "animals", "boss"));
+                    "eventPresets", GameEventSpec.DEFINITIONS.stream().map(GameEventSpec.Definition::id).toList());
         }
         return catalogCache;
     }
@@ -229,6 +241,8 @@ public final class GameService implements Listener, AutoCloseable {
     }
 
     public List<Map<String, Object>> activeEvents() { requireMainThread(); return eventsEnabled ? eventEngine.activeEvents() : List.of(); }
+    public Map<String,Object> eventCatalog(){requireMainThread();return GameEventEngine.catalog();}
+    public Map<String,Object> gameEvents(){requireMainThread();return map("active",activeEvents(),"history",eventEngine.history(),"enabled",eventsEnabled,"limits",GameEventEngine.catalog().get("limits"));}
 
     public Object execute(String action, Map<String, Object> p) {
         requireMainThread();
@@ -330,8 +344,8 @@ public final class GameService implements Listener, AutoCloseable {
         }
         Player player = online(p);
         switch (action) {
-            case "player.heal" -> heal(player);
-            case "player.feed" -> { player.setFoodLevel(20); player.setSaturation(20); }
+            case "player.heal" -> {if(p.containsKey("amount")){var max=player.getAttribute(Attribute.MAX_HEALTH);player.setHealth(Math.min(max==null?20:max.getValue(),player.getHealth()+decimal(p,"amount",0,2048)));}else heal(player);}
+            case "player.feed" -> { player.setFoodLevel(integer(p,"food",0,20,20)); player.setSaturation((float)decimal(p,"saturation",0,20,20)); }
             case "player.kick" -> player.kickPlayer(optionalString(p, "reason", 500, "Отключён администратором MCC"));
             case "player.ipban", "player.ban_ip" -> {
                 String reason = optionalString(p, "reason", 500, "IP заблокирован администратором MCC");
@@ -466,6 +480,7 @@ public final class GameService implements Listener, AutoCloseable {
             job.remaining--; spawned++;
             if (job.remaining == 0) { spawnJobs.remove(); events.accept("spawn", job.dto(job.failed == 0 ? "completed" : "partial")); }
         }
+        if(!capture(capturePlayers))inventoryDirty.clear();
         if (ticks % 10 == 0 && !inventoryDirty.isEmpty()) { for (UUID id : List.copyOf(inventoryDirty)) events.accept("inventory", map("uuid", id.toString(), "kind", "main")); inventoryDirty.clear(); }
         if (ticks % 1200 == 0) {
             long now = System.currentTimeMillis();
@@ -559,21 +574,21 @@ public final class GameService implements Listener, AutoCloseable {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onMapPlace(BlockPlaceEvent e) { mapEngine.invalidateTerrain(e.getBlock().getWorld().getName(),e.getBlock().getX(),e.getBlock().getZ()); }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onMapBreak(BlockBreakEvent e) { mapEngine.invalidateTerrain(e.getBlock().getWorld().getName(),e.getBlock().getX(),e.getBlock().getZ()); }
-    @EventHandler(priority = EventPriority.MONITOR) public void onJoin(PlayerJoinEvent e) { Player p = e.getPlayer(); knownNames.put(p.getUniqueId(), p.getName()); joinedAt.put(p.getUniqueId(), System.currentTimeMillis()); events.accept("join", playerDto(p, false)); events.accept("trigger", map("trigger", "join", "uuid", p.getUniqueId().toString(), "world", p.getWorld().getName(), "name", p.getName())); }
+    @EventHandler(priority = EventPriority.MONITOR) public void onJoin(PlayerJoinEvent e) { Player p = e.getPlayer(); knownNames.put(p.getUniqueId(), p.getName()); joinedAt.put(p.getUniqueId(), System.currentTimeMillis()); if(capture(capturePlayers))events.accept("join", playerDto(p, false)); events.accept("trigger", map("trigger", "join", "uuid", p.getUniqueId().toString(), "world", p.getWorld().getName(), "name", p.getName())); }
     @EventHandler(priority = EventPriority.MONITOR) public void onQuit(PlayerQuitEvent e) { Player p = e.getPlayer(); events.accept("quit", map("uuid", p.getUniqueId().toString(), "name", p.getName(), "at", System.currentTimeMillis())); events.accept("trigger", map("trigger", "quit", "uuid", p.getUniqueId().toString(), "world", p.getWorld().getName(), "name", p.getName())); joinedAt.remove(p.getUniqueId()); frozen.remove(p.getUniqueId()); }
     @EventHandler(priority = EventPriority.MONITOR) public void onDeath(PlayerDeathEvent e) { Player p = e.getEntity(); events.accept("death", map("uuid", p.getUniqueId().toString(), "name", p.getName(), "at", System.currentTimeMillis())); events.accept("trigger", map("trigger", "death", "uuid", p.getUniqueId().toString(), "world", p.getWorld().getName(), "name", p.getName())); }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onWeather(WeatherChangeEvent e) { Bukkit.getScheduler().runTask(plugin, () -> events.accept("world", worldDto(e.getWorld(), false))); }
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true) public void onMove(PlayerMoveEvent e) { if (frozen.contains(e.getPlayer().getUniqueId()) && (e.getFrom().getX() != e.getTo().getX() || e.getFrom().getY() != e.getTo().getY() || e.getFrom().getZ() != e.getTo().getZ())) { Location l = e.getFrom().clone(); l.setYaw(e.getTo().getYaw()); l.setPitch(e.getTo().getPitch()); e.setTo(l); } }
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true) public void onChat(AsyncPlayerChatEvent e) { UUID id = e.getPlayer().getUniqueId(); if (!externallyManaged() && muted(id)) { e.setCancelled(true); Bukkit.getScheduler().runTask(plugin, () -> { Player p = Bukkit.getPlayer(id); if (!externallyManaged() && p != null) p.sendMessage("Чат временно заблокирован администратором."); }); } }
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onChatRecorded(AsyncPlayerChatEvent e) { UUID id = e.getPlayer().getUniqueId(); String text = e.getMessage(); String name = knownNames.getOrDefault(id, id.toString()); Bukkit.getScheduler().runTask(plugin, () -> events.accept("chat", map("uuid", id.toString(), "name", name, "message", text, "at", System.currentTimeMillis(), "source", "minecraft"))); }
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onClick(InventoryClickEvent e) { inventoryDirty.add(e.getWhoClicked().getUniqueId()); }
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onDrag(InventoryDragEvent e) { inventoryDirty.add(e.getWhoClicked().getUniqueId()); }
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onDrop(PlayerDropItemEvent e) { inventoryDirty.add(e.getPlayer().getUniqueId()); }
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onPickup(org.bukkit.event.entity.EntityPickupItemEvent e) { if (e.getEntity() instanceof Player player) inventoryDirty.add(player.getUniqueId()); }
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onChatRecorded(AsyncPlayerChatEvent e) { if(!capture(captureChat))return;UUID id = e.getPlayer().getUniqueId(); String text = e.getMessage(); String name = knownNames.getOrDefault(id, id.toString()); Bukkit.getScheduler().runTask(plugin, () -> {if(!closed&&capture(captureChat)&&!e.isCancelled())events.accept("chat", map("uuid", id.toString(), "name", name, "message", text, "at", System.currentTimeMillis(), "source", "minecraft"));}); }
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onClick(InventoryClickEvent e) { if(capture(capturePlayers))inventoryDirty.add(e.getWhoClicked().getUniqueId()); }
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onDrag(InventoryDragEvent e) { if(capture(capturePlayers))inventoryDirty.add(e.getWhoClicked().getUniqueId()); }
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onDrop(PlayerDropItemEvent e) { if(capture(capturePlayers))inventoryDirty.add(e.getPlayer().getUniqueId()); }
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void onPickup(org.bukkit.event.entity.EntityPickupItemEvent e) { if(capture(capturePlayers)&&e.getEntity() instanceof Player player)inventoryDirty.add(player.getUniqueId()); }
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true) public void onEventMobPickup(org.bukkit.event.entity.EntityPickupItemEvent e) {
         if (!(e.getEntity() instanceof Player) && e.getEntity().getPersistentDataContainer().has(new NamespacedKey("mcc", "game_event"), org.bukkit.persistence.PersistentDataType.STRING)) e.setCancelled(true);
     }
-    @EventHandler(priority = EventPriority.MONITOR) public void onBreak(PlayerItemBreakEvent e) { inventoryDirty.add(e.getPlayer().getUniqueId()); }
+    @EventHandler(priority = EventPriority.MONITOR) public void onBreak(PlayerItemBreakEvent e) { if(capture(capturePlayers))inventoryDirty.add(e.getPlayer().getUniqueId()); }
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true) public void onEventItemMerge(org.bukkit.event.entity.ItemMergeEvent e) {
         NamespacedKey ownerKey = new NamespacedKey("mcc", "game_event");
         String source = e.getEntity().getPersistentDataContainer().get(ownerKey, org.bukkit.persistence.PersistentDataType.STRING);

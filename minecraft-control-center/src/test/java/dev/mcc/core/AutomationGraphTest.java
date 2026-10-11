@@ -7,7 +7,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class AutomationGraphTest {
     static Map<String,Object> node(String id,String type,Map<String,Object> config){return new LinkedHashMap<>(Map.of("id",id,"type",type,"config",new LinkedHashMap<>(config),"pos",Map.of("x",0,"y",0)));}
     static Map<String,Object> edge(String id,String source,String target,String handle){return new LinkedHashMap<>(Map.of("id",id,"source",source,"target",target,"sourceHandle",handle));}
-    static Map<String,Object> graph(List<Map<String,Object>> nodes,List<Map<String,Object>> edges){Map<String,Object> body=new LinkedHashMap<>();body.put("id",UUID.randomUUID().toString());body.put("name","Fixture graph");body.put("enabled",true);body.put("world","fixture");body.put("cooldownSeconds",30);body.put("graphVersion",1);body.put("nodes",new ArrayList<>(nodes));body.put("edges",new ArrayList<>(edges));return body;}
+    static Map<String,Object> graph(List<Map<String,Object>> nodes,List<Map<String,Object>> edges){Map<String,Object> body=new LinkedHashMap<>();body.put("id",UUID.randomUUID().toString());body.put("name","Fixture graph");body.put("enabled",true);body.put("confirmed",true);body.put("world","fixture");body.put("cooldownSeconds",30);body.put("graphVersion",1);body.put("nodes",new ArrayList<>(nodes));body.put("edges",new ArrayList<>(edges));return body;}
     static Map<String,Object> trigger(){return node("start","trigger",Map.of("trigger","interval","intervalSeconds",30));}
     static Map<String,Object> action(String id,int time){return node(id,"action",Map.of("action","world.time","params",Map.of("time",time)));}
     static Map<String,Object> simple(){return graph(List.of(trigger(),action("set",6000)),List.of(edge("a","start","set","next")));}

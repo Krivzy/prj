@@ -1,6 +1,6 @@
 # Bukkit portability and native moderation
 
-MCC 0.7 compiles against the official Spigot API for Minecraft 26.3: `org.spigotmc:spigot-api:26.3-R0.1-20261004.024323-9`. This provides the common Bukkit surface used by Spigot, Paper and compatible forks. Compilation is evidence of API portability; it is not a claim that every server distribution or optional feature has been exercised natively.
+MCC 0.8 compiles against the official Spigot API for Minecraft 26.3: `org.spigotmc:spigot-api:26.3-R0.1-20261004.024323-9`. This provides the common Bukkit surface used by Spigot, Paper and compatible forks. Compilation is evidence of API portability; it is not a claim that every server distribution or optional feature has been exercised natively.
 
 ## Public API boundary
 
@@ -32,7 +32,15 @@ While a known external provider is enabled, native MCC moderation cannot create,
 
 The durable history can record a failed request or a pending native reconciliation when provider ownership changes during an asynchronous operation. This preserves evidence and avoids a hidden second enforcement layer. When all known external providers are disabled, native MCC behavior can resume and reconcile MCC-owned records. MCC does not pardon a separate native ban owned by another source.
 
-## Verification performed
+## 0.8 module boundary
+
+Player and entity observation flags avoid periodic player/inventory/entity walks. Metrics OFF also skips loaded-chunk enumeration, optional host CPU/RAM/disk sampling and metric-history writes. Cached state is scrubbed before publication. Required tick health, authentication, configuration, durable audit, retention cleanup and external punishment presence continue; disabling observations does not disable the kernel or stop all MCC tasks. See [Modules](MODULES.md).
+
+Integrations OFF rejects optional discovery/query/mutation and clears its permission cache, while lightweight external-punishment ownership remains active. An enabled AdvancedBanZ or other known provider therefore cannot silently reactivate builtin moderation.
+
+The coordinated candidate build passed 269 Java, 78 Node and 11 Python tests. Fresh isolated actual Paper 26.3 build 169 and Purpur 26.3 build 2647 both passed native startup, three-world/game-rule public API reads, five profile kinds/six applications, real module HTTP/WebSocket lifecycles, complete saved-image rendering and normal requested restarts. Seven boots per core and the final normal exit 0 were verified with exact owned process/port guards. Paper additionally used the real AdvancedBanZ/LuckPerms integrations; the bare Purpur fixture verified known-provider absence. Separate Paper feature tests confirmed persisted LuckPerms inert nodes/revision and the synthetic ore-history dataset after the observed UI restart and an explicitly documented runtime recovery. Native Spigot remains untested. The Purpur 2647 binary is labelled experimental by its official API; these fixtures are not a performance or universal-plugin compatibility guarantee.
+
+## Historical 0.7 verification
 
 The whole Java source compiled against the pinned Spigot API during the targeted Gradle run. `OreLedgerTest` passed 10 tests; `PunishmentTest` passed 13, including provider activation, fail-closed behavior, retained histories and queued shutdown; `ServerPlatformTest` passed 4, covering exact version parsing, unavailable metrics, scheduler pauses, warm-up and immutable sample copies. Failures, errors and skipped tests were all zero. Three ore-view Node tests and TypeScript `--noEmit` also passed.
 
@@ -40,4 +48,4 @@ The whole Java source compiled against the pinned Spigot API during the targeted
 
 These checks do not replace native Paper/Spigot startup, command/action smoke tests, listener event tests or browser visual inspection. Final assembled release checks are recorded separately.
 
-Primary references: [official Spigot snapshot metadata](https://hub.spigotmc.org/nexus/content/repositories/snapshots/org/spigotmc/spigot-api/26.3-R0.1-SNAPSHOT/maven-metadata.xml), [Bukkit Server API](https://hub.spigotmc.org/javadocs/spigot/org/bukkit/Server.html), [OfflinePlayer API](https://hub.spigotmc.org/javadocs/spigot/org/bukkit/OfflinePlayer.html), [AttributeModifier API](https://hub.spigotmc.org/javadocs/spigot/org/bukkit/attribute/AttributeModifier.html) and [Paper's public profile interface](https://jd.papermc.io/paper/26.2/com/destroystokyo/paper/profile/PlayerProfile.html).
+Primary references: [official Spigot snapshot metadata](https://hub.spigotmc.org/nexus/content/repositories/snapshots/org/spigotmc/spigot-api/26.3-R0.1-SNAPSHOT/maven-metadata.xml), [Bukkit Server API](https://hub.spigotmc.org/javadocs/spigot/org/bukkit/Server.html), [OfflinePlayer API](https://hub.spigotmc.org/javadocs/spigot/org/bukkit/OfflinePlayer.html), [AttributeModifier API](https://hub.spigotmc.org/javadocs/spigot/org/bukkit/attribute/AttributeModifier.html) and [Paper's public profile interface](https://jd.papermc.io/paper/26.3/com/destroystokyo/paper/profile/PlayerProfile.html).

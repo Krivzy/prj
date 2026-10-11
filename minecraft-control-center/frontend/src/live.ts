@@ -1,26 +1,36 @@
 import {useSyncExternalStore} from 'react';
 import {request} from './api';
 import type {Player, Snapshot, StreamEntry} from './types';
+import {moduleEnabled,requestedTopics,topicEnabled} from './module-view';
+import type {ModuleFlags} from './module-view';
 import {mergeEntries} from './policy';
 
 type LiveState = {snapshot: Snapshot | null; players: Player[]; status: 'connecting' | 'live' | 'offline'; sequence: number; error: string; chat: StreamEntry[]; console: StreamEntry[]; timeline: StreamEntry[]; updated: number};
 let state: LiveState = {snapshot: null, players: [], status: 'connecting', sequence: 0, error: '', chat: [], console: [], timeline: [], updated: 0};
+let modules:ModuleFlags={},moduleEpoch=0;
+function scrubModules(next:ModuleFlags){if(Object.keys(next).length!==Object.keys(modules).length||Object.keys(next).some(key=>next[key]!==modules[key]))moduleEpoch++;modules={...next};const patch:Partial<LiveState>={};if(!moduleEnabled(next,'chat'))patch.chat=[];if(!moduleEnabled(next,'console'))patch.console=[];if(!moduleEnabled(next,'timeline'))patch.timeline=[];if(!moduleEnabled(next,'playerSnapshots'))patch.players=[];return patch;}
 const listeners = new Set<() => void>();
 const emit = (next: Partial<LiveState>) => {state = {...state, ...next}; listeners.forEach(fn => fn());};
-export const useLive = () => useSyncExternalStore(fn => {listeners.add(fn); return () => listeners.delete(fn);}, () => state);
-export function resetLive() {emit({snapshot: null, players: [], status: 'offline', sequence: 0, error: '', chat: [], console: [], timeline: []});}
+export const getLiveState = () => state;
+export const useLive = () => useSyncExternalStore(fn => {listeners.add(fn); return () => listeners.delete(fn);}, getLiveState);
+export function resetLive() {moduleEpoch++;modules={};emit({snapshot: null, players: [], status: 'offline', sequence: 0, error: '', chat: [], console: [], timeline: []});}
 export async function refreshLive() {
-  const responses = await Promise.allSettled([request<Snapshot>('/api/state'), request<Player[]>('/api/players')]);
+  const startedEpoch=moduleEpoch;
+  const responses = await Promise.allSettled([request<Snapshot>('/api/state')]);
+  if(startedEpoch!==moduleEpoch)return;
   const patch: Partial<LiveState> = {updated: Date.now()};
   if (responses[0].status === 'fulfilled') {
     const currentStamp = state.snapshot ? new Date(state.snapshot.timestamp).getTime() : 0;
     const nextStamp = new Date(responses[0].value.timestamp).getTime();
-    if (!state.snapshot || !Number.isFinite(currentStamp) || !Number.isFinite(nextStamp) || nextStamp >= currentStamp) patch.snapshot = responses[0].value;
+    if (state.snapshot && Number.isFinite(currentStamp) && Number.isFinite(nextStamp) && nextStamp < currentStamp)return;
+    patch.snapshot = responses[0].value;
+    Object.assign(patch,scrubModules((responses[0].value.modules as ModuleFlags|undefined)??{}));
     patch.error = '';
   }
   else patch.error = responses[0].reason instanceof Error ? responses[0].reason.message : 'Не удалось получить данные';
-  if (responses[1].status === 'fulfilled') patch.players = responses[1].value;
+  // Commit accepted state now; a slower player response must never reapply that old snapshot.
   emit(patch);
+  if(moduleEnabled(modules,'playerSnapshots'))try{const epoch=moduleEpoch,players=await request<Player[]>('/api/players');if(epoch===moduleEpoch&&moduleEnabled(modules,'playerSnapshots'))emit({players});}catch{}else emit({players:[]});
 }
 export function connectLive(role = 'viewer') {
   let stopped = false;
@@ -30,20 +40,18 @@ export function connectLive(role = 'viewer') {
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   let lastPong = Date.now();
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let connectionEpoch=0;
+  function subscribe(){if(ws?.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:'subscribe',topics:requestedTopics(role,modules)}));}
   function connect() {
     if (stopped) return;
+    const generation=++connectionEpoch;
     emit({status: 'connecting'});
     ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
     ws.onopen = () => {
       attempts = 0; lastPong = Date.now(); emit({status: 'live', sequence: 0});
-      void refreshLive();
-      const loadHistory = (topic:'chat'|'console') => void request<StreamEntry[]>(`/api/${topic}`).then(history=>emit({[topic]:mergeEntries(history,state[topic],250)})).catch(()=>{});
-      if (role !== 'viewer') loadHistory('chat');
-      if (['owner','admin'].includes(role)) loadHistory('console');
-      const topics = ['state', 'players', 'timeline', 'events','spawn','world'];
-      if (role !== 'viewer') topics.push('chat','punishments');
-      if (['owner','admin'].includes(role)) topics.push('console','automation');
-      ws?.send(JSON.stringify({type: 'subscribe', topics}));
+      const loadHistory = (topic:'chat'|'console') => {const epoch=moduleEpoch;void request<StreamEntry[]>(`/api/${topic}`).then(history=>{if(!stopped&&generation===connectionEpoch&&epoch===moduleEpoch&&moduleEnabled(modules,topic))emit({[topic]:mergeEntries(history,state[topic],250)});}).catch(()=>{});};
+      void refreshLive().then(()=>{if(stopped||generation!==connectionEpoch)return;subscribe();if(role!=='viewer'&&moduleEnabled(modules,'chat'))loadHistory('chat');if(['owner','admin'].includes(role)&&moduleEnabled(modules,'console'))loadHistory('console');});
+      subscribe();
       heartbeat = setInterval(() => {
         if (Date.now() - lastPong > 65000) ws?.close();
         else if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'ping'}));
@@ -54,10 +62,10 @@ export function connectLive(role = 'viewer') {
       try {msg = JSON.parse(event.data);} catch {return;}
       lastPong = Date.now();
       if (msg.type === 'hello') {emit({sequence: msg.sequence ?? 0}); return;}
-      if (msg.type !== 'event' || !msg.topic) return;
+      if (msg.type !== 'event' || !msg.topic||!topicEnabled(modules,msg.topic)) return;
       if (typeof msg.sequence === 'number' && msg.sequence <= state.sequence) return;
       const patch: Partial<LiveState> = {sequence: msg.sequence ?? state.sequence, updated: Date.now()};
-      if (msg.topic === 'state' && msg.data && typeof msg.data === 'object') patch.snapshot = msg.data as Snapshot;
+      if (msg.topic === 'state' && msg.data && typeof msg.data === 'object'){patch.snapshot=msg.data as Snapshot;const next=(patch.snapshot.modules as ModuleFlags|undefined)??{};const epoch=moduleEpoch;Object.assign(patch,scrubModules(next));if(epoch!==moduleEpoch)subscribe();}
       if (msg.topic === 'players' && Array.isArray(msg.data)) patch.players = msg.data as Player[];
       if (['chat', 'console', 'timeline'].includes(msg.topic)) {
         const topic = msg.topic as 'chat' | 'console' | 'timeline';

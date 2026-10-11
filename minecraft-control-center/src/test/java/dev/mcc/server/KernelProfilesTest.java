@@ -48,6 +48,39 @@ class KernelProfilesTest {
     @Test void customAfterManagedKeepsTheSelectedKernelBytes()throws Exception {
         try(KernelProfiles manager=service()){apply(manager,"optimized");Map<String,String> before=kernelHashes();apply(manager,"custom");assertEquals(before,kernelHashes());assertEquals(1,runtime.liveCalls);assertEquals(false,done(manager.status()).get("pendingRestart"));}
     }
+    @Test void maximumOptimizationPreservesEveryDistanceAndNeverCallsLiveSetters()throws Exception {
+        try(KernelProfiles manager=service()){
+            byte[] properties=Files.readAllBytes(root.resolve("server.properties"));Map<String,Object> plan=plan(manager,"maximum-optimized");assertEquals(false,plan.get("liveDistances"));assertEquals(true,plan.get("preservesDistances"));
+            for(Object file:(List<?>)plan.get("files")){assertNotEquals("server.properties",((Map<?,?>)file).get("path"));for(Object change:(List<?>)((Map<?,?>)file).get("changes"))assertFalse(String.valueOf(((Map<?,?>)change).get("key")).endsWith("distance"));}
+            Map<String,Object> result=done(manager.apply("owner-id",(String)plan.get("planId"),true,()->true));assertEquals(true,result.get("pendingRestart"));assertArrayEquals(properties,Files.readAllBytes(root.resolve("server.properties")));assertEquals(0,runtime.liveCalls);
+            Map<?,?> spigot=KernelConfigFiles.readYaml(KernelConfigFiles.Kind.SPIGOT,Files.readAllBytes(root.resolve("spigot.yml")));Map<?,?> worlds=(Map<?,?>)spigot.get("world-settings");assertEquals("default",((Map<?,?>)worlds.get("default")).get("view-distance"));assertEquals(16,((Map<?,?>)worlds.get("custom-world")).get("view-distance"));assertEquals(true,((Map<?,?>)worlds.get("default")).get("nerf-spawner-mobs"));assertEquals(2,((Map<?,?>)worlds.get("default")).get("max-entity-collisions"));
+            for(String file:List.of("config/paper-world-defaults.yml","world/dimensions/minecraft/overworld/paper-world.yml")){Map<?,?> paper=KernelConfigFiles.readYaml(KernelConfigFiles.Kind.PAPER,Files.readAllBytes(root.resolve(file)));assertEquals(2,((Map<?,?>)paper.get("collisions")).get("max-entity-collisions"));}
+            done(manager.reconcileStartup());assertEquals(0,runtime.liveCalls);assertArrayEquals(properties,Files.readAllBytes(root.resolve("server.properties")));assertEquals("maximum-optimized",result.get("profile"));
+        }
+    }
+    @Test void maximumOfflineStartupRestoresMechanicsDriftButRetainsNewManualDistances()throws Exception {
+        try(KernelProfiles manager=service()){apply(manager,"maximum-optimized");}awaitLease();
+        write("server.properties",read("server.properties").replace("view-distance=12","view-distance=24").replace("simulation-distance=7","simulation-distance=10"));
+        write("spigot.yml",read("spigot.yml").replace("nerf-spawner-mobs: true","nerf-spawner-mobs: false").replace("view-distance: 16","view-distance: 20"));byte[] desired=Files.readAllBytes(root.resolve("server.properties"));
+        Map<String,Object> outcome=KernelProfiles.reapplyOffline(root,data,"Paper","26.3");assertEquals(1L,outcome.get("changedFiles"));assertArrayEquals(desired,Files.readAllBytes(root.resolve("server.properties")));Map<?,?> defaults=(Map<?,?>)((Map<?,?>)KernelConfigFiles.readYaml(KernelConfigFiles.Kind.SPIGOT,Files.readAllBytes(root.resolve("spigot.yml"))).get("world-settings")).get("default");assertEquals(true,defaults.get("nerf-spawner-mobs"));assertTrue(read("spigot.yml").contains("view-distance: 20"));
+    }
+    @Test void leavingMaximumForAnotherManagedProfileRestoresAllMaximumExclusiveKeys()throws Exception {
+        try(KernelProfiles manager=service()){
+            for(String profile:List.of("vanilla","vanilla-performance","optimized")){
+                apply(manager,"maximum-optimized");apply(manager,profile);
+                Map<?,?> worlds=(Map<?,?>)KernelConfigFiles.readYaml(KernelConfigFiles.Kind.SPIGOT,Files.readAllBytes(root.resolve("spigot.yml"))).get("world-settings");
+                for(Object value:worlds.values()){
+                    Map<?,?> settings=(Map<?,?>)value;assertEquals(8,settings.get("max-entity-collisions"),profile);assertEquals(false,settings.get("nerf-spawner-mobs"),profile);assertEquals(true,settings.get("tick-inactive-villagers"),profile);
+                    boolean optimized=profile.equals("optimized");assertEquals(optimized?6:8,settings.get("mob-spawn-range"),profile);assertEquals(optimized?2.5:0.5,((Map<?,?>)settings.get("merge-radius")).get("item"),profile);
+                    assertEquals(optimized?32:0,((Map<?,?>)settings.get("entity-activation-range")).get("animals"),profile);
+                }
+                for(String file:List.of("config/paper-world-defaults.yml","world/dimensions/minecraft/overworld/paper-world.yml")){Map<?,?> paper=KernelConfigFiles.readYaml(KernelConfigFiles.Kind.PAPER,Files.readAllBytes(root.resolve(file)));assertEquals(8,((Map<?,?>)paper.get("collisions")).get("max-entity-collisions"),profile);}
+            }
+        }
+    }
+    @Test void spigotMaximumHonestlySkipsRedstoneWhileKeepingDistances()throws Exception {
+        try(KernelProfiles manager=service()){runtime.kernel="Spigot";runtime.live=false;Map<String,Object> plan=plan(manager,"maximum-optimized");assertTrue(((List<?>)plan.get("tradeoffs")).stream().anyMatch(v->String.valueOf(v).contains("skipped")));assertEquals(1,((List<?>)plan.get("files")).size());apply(manager,"maximum-optimized");assertEquals(0,runtime.liveCalls);assertTrue(read("server.properties").contains("view-distance=12"));}
+    }
     @Test void repeatingSavedProfileCannotClearUnappliedRestartSettings()throws Exception {
         try(KernelProfiles manager=service()){assertEquals(true,apply(manager,"optimized").get("pendingRestart"));Map<String,String> files=kernelHashes();assertEquals(true,apply(manager,"optimized").get("pendingRestart"));assertEquals(files,kernelHashes());assertEquals(false,done(manager.reconcileStartup()).get("pendingRestart"));}
     }

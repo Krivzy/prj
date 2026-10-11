@@ -22,6 +22,15 @@ The write route must use MCC's existing tracked action IDs and audit handling, s
 
 ## LuckPerms
 
+### Редактор и autocomplete 0.8
+
+Группы/загруженные игроки находятся слева; справа выбранный holder, таблица прав, вкладки inheritance/metadata, add bar снизу. Схема следует [официальному Web Editor](https://github.com/LuckPerms/LuckPerms/wiki/Web-Editor/739791d24e41f1991b485c9cf6aa9ea42554f8db), но операции сразу сохраняются отдельными подтверждёнными API запросами; общего staged-save нет. Контексты вводятся key/value, expiry — datetime; право можно дать группе или проверить известного offline игрока через UUID.
+
+`POST /api/integrations/luckperms/query` с телом `{id:"<unique action UUID>",action:"suggestions",query:"<text>",limit:20}` и штатной CSRF-проверкой читает объявленный Bukkit permission registry и children/descriptions, объединяемые UI с текущими node keys. Кеш 30 секунд, registry cap 8192, ответ до 40 подсказок, query до 200 символов. Prefix совпадения первыми, дубли удаляются. Необъявленные wildcard/динамические права не придумываются; точное право можно ввести вручную. Keyboard: up/down/Enter/Escape, late responses отвергаются. Inheritance подсказывает реальные имена существующих групп.
+
+Integration OFF отменяет queued операции, очищает кеш и отклоняет старые результаты; lifecycle epoch и повторные authority checks предотвращают возобновление прежней работы при быстром OFF→ON. Уже начавшаяся запись во внешнем provider не отменяется гарантированно; при неопределённом результате holder нужно обновить перед повтором. Внешний владелец наказаний остаётся независимо обнаруживаемым, встроенные санкции не разблокируются отключением integration UI.
+
+
 Supported boundary: the LuckPerms 5 public provider/managers and PermissionNode/InheritanceNode builders. Real group storage loading, loaded users, offline user loading, normal permission nodes, contexts, expiry and inheritance are exposed.
 
 Query bodies:

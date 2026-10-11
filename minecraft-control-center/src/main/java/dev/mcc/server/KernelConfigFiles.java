@@ -104,6 +104,7 @@ final class KernelConfigFiles {
     private static void validateValue(String key,Object value){
         boolean valid=switch(key){
             case "view-distance","simulation-distance" -> value instanceof Integer n&&n>=2&&n<=32;
+            case "max-entity-collisions" -> value instanceof Integer n&&n>=1&&n<=8;
             case "mob-spawn-range" -> value instanceof Integer n&&n>=1&&n<=8;
             case "animals","monsters","raiders","misc","water","villagers","flying-monsters" -> value instanceof Integer n&&n>=0&&n<=128;
             case "max-auto-save-chunks-per-tick" -> value instanceof Integer n&&n>=8&&n<=200;
@@ -117,9 +118,9 @@ final class KernelConfigFiles {
     private static void validatePath(Kind kind,List<String> path)throws IOException {
         String dotted=String.join(".",path);boolean valid=switch(kind){
             case PROPERTIES -> path.size()==1&&Set.of("view-distance","simulation-distance").contains(dotted);
-            case PAPER -> Set.of("misc.redstone-implementation","misc.update-pathfinding-on-block-update","environment.optimize-explosions","chunks.max-auto-save-chunks-per-tick","chunks.delay-chunk-unloads-by","entities.behavior.only-merge-items-horizontally").contains(dotted);
+            case PAPER -> Set.of("misc.redstone-implementation","misc.update-pathfinding-on-block-update","environment.optimize-explosions","chunks.max-auto-save-chunks-per-tick","chunks.delay-chunk-unloads-by","entities.behavior.only-merge-items-horizontally","collisions.max-entity-collisions").contains(dotted);
             case PURPUR -> Set.of("settings.use-alternate-keepalive","settings.tps-catchup").contains(dotted);
-            case SPIGOT -> path.size()>=3&&path.getFirst().equals("world-settings")&&(path.size()==3&&Set.of("view-distance","simulation-distance","mob-spawn-range","tick-inactive-villagers","nerf-spawner-mobs").contains(path.getLast())||path.size()==4&&(path.get(2).equals("merge-radius")&&path.getLast().equals("item")||path.get(2).equals("entity-activation-range")&&Set.of("animals","monsters","raiders","misc","water","villagers","flying-monsters").contains(path.getLast())));
+            case SPIGOT -> path.size()>=3&&path.getFirst().equals("world-settings")&&(path.size()==3&&Set.of("view-distance","simulation-distance","mob-spawn-range","max-entity-collisions","tick-inactive-villagers","nerf-spawner-mobs").contains(path.getLast())||path.size()==4&&(path.get(2).equals("merge-radius")&&path.getLast().equals("item")||path.get(2).equals("entity-activation-range")&&Set.of("animals","monsters","raiders","misc","water","villagers","flying-monsters").contains(path.getLast())));
         };if(!valid)throw new IOException("Kernel setting path is outside the supported allowlist");
     }
     private static String utf8(byte[] bytes)throws IOException {

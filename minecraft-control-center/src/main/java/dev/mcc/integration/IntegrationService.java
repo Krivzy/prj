@@ -21,41 +21,56 @@ public final class IntegrationService implements AutoCloseable {
         boolean active(Binding binding)throws Exception;
         Location location(String world,int x,int y,int z)throws Exception;
         default boolean playerMatches(String name,UUID uuid)throws Exception{return false;}
+        default List<Map<String,Object>> permissions()throws Exception{return List.of();}
+        default void clearCaches(){}
     }
     private final Runtime runtime;
     private final BiPredicate<Auth.Session,Boolean> authority;
     private final ThreadPoolExecutor workers=new ThreadPoolExecutor(2,2,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<>(16),r->{Thread t=new Thread(r,"MCC-integrations");t.setDaemon(true);return t;},new ThreadPoolExecutor.AbortPolicy());
-    private final AtomicBoolean closed=new AtomicBoolean();
+    private final AtomicBoolean closed=new AtomicBoolean(), enabled=new AtomicBoolean(true);
+    private final AtomicLong lifecycle=new AtomicLong();
     private final Set<CompletableFuture<?>> pending=ConcurrentHashMap.newKeySet();
     private final Object[] stripes=new Object[32];
     private IntegrationPresence presence;
     public IntegrationService(JavaPlugin plugin,MainThread main,BiPredicate<Auth.Session,Boolean> authority){this(new BukkitRuntime(main),authority);presence=new IntegrationPresence(plugin);}
-    public IntegrationService(Runtime runtime,BiPredicate<Auth.Session,Boolean> authority){this.runtime=Objects.requireNonNull(runtime);this.authority=Objects.requireNonNull(authority);Arrays.setAll(stripes,i->new Object());}
-    public CompletableFuture<Map<String,Object>> discover(Auth.Session actor){return submit(()->{
-        authorize(actor,false);List<Map<String,Object>> items=new ArrayList<>();List<Binding> bindings=bindings();String punishment=PunishmentProviders.selected(bindings);
+    public IntegrationService(Runtime runtime,BiPredicate<Auth.Session,Boolean> authority){this.runtime=Objects.requireNonNull(runtime);this.authority=Objects.requireNonNull(authority);Arrays.setAll(stripes,i->new Object());workers.setKeepAliveTime(30,TimeUnit.SECONDS);workers.allowCoreThreadTimeOut(true);}
+    /** Release panel work while retaining the independent native moderation ownership guard. */
+    public synchronized void setEnabled(boolean value){
+        if(closed.get()||enabled.get()==value)return;
+        lifecycle.incrementAndGet();
+        enabled.set(value);
+        if(!value){for(CompletableFuture<?> future:pending)future.cancel(false);workers.getQueue().clear();runtime.clearCaches();}
+    }
+    public CompletableFuture<Map<String,Object>> discover(Auth.Session actor){return submit(epoch->{
+        authorize(actor,false,epoch);List<Map<String,Object>> items=new ArrayList<>();List<Binding> bindings=bindings();String punishment=PunishmentProviders.selected(bindings);
         for(Binding b:bindings){
             items.add(Map.of("id",b.id(),"title",b.title(),"version",b.version(),"available",b.unavailable().isEmpty(),"message",b.unavailable(),"capabilities",capabilities(b)));
         }
-        authorize(actor,false);return Map.of("items",items,"punishmentProvider",punishment);
+        authorize(actor,false,epoch);return Map.of("items",items,"punishmentProvider",punishment);
     });}
     /** Must gate native startup/enforcement as well as UI; unavailable providers still own moderation. */
-    public CompletableFuture<String> punishmentProvider(Auth.Session actor){return discover(actor).thenApply(value->String.valueOf(value.get("punishmentProvider")));}
+    public CompletableFuture<String> punishmentProvider(Auth.Session actor){
+        try{authorizeSession(actor,false);if(!enabled.get())return CompletableFuture.completedFuture(disabledPunishmentOwner());}
+        catch(RuntimeException e){return CompletableFuture.failedFuture(e);}
+        return discover(actor).thenApply(value->String.valueOf(value.get("punishmentProvider")));
+    }
     /** Internal lifecycle lookup; do not block on it from the server thread. */
-    public CompletableFuture<String> punishmentProvider(){return submit(()->PunishmentProviders.selected(bindings()));}
+    public CompletableFuture<String> punishmentProvider(){return !enabled.get()?CompletableFuture.completedFuture(disabledPunishmentOwner()):submit(epoch->PunishmentProviders.selected(bindings()));}
+    private String disabledPunishmentOwner(){return closed.get()||presence==null||presence.getAsBoolean()?"unavailable":"builtin";}
     /** True for enabled known moderation providers even with unsupported APIs; never blocks listeners. */
     public BooleanSupplier externalPunishments(){return ()->closed.get()||presence!=null&&presence.getAsBoolean();}
-    public CompletableFuture<Map<String,Object>> query(Auth.Session actor,String id,Map<String,Object> body){Map<String,Object> input=copy(body);return submit(()->{
-        Binding binding=bind(actor,id,false);Map<String,Object> result=switch(id){
-            case "luckperms"->new LuckPermsIntegration(binding).query(input);
+    public CompletableFuture<Map<String,Object>> query(Auth.Session actor,String id,Map<String,Object> body){Map<String,Object> input=copy(body);return submit(epoch->{
+        Binding binding=bind(actor,id,false,epoch);Map<String,Object> result=switch(id){
+            case "luckperms"->"suggestions".equals(input.get("action"))?PermissionSuggestions.query(input,runtime.permissions()):new LuckPermsIntegration(binding).query(input);
             case "coreprotect"->CoreProtectIntegration.lookup(binding,input,runtime);
             case "advancedban"->new AdvancedBanIntegration(binding).query(input);
             case "grim"->GrimIntegration.query(binding,input);
             default->throw new IllegalArgumentException("Unknown integration");
-        };authorize(actor,false);if(!runtime.active(binding))throw new IllegalStateException("Plugin is no longer enabled");return result;
+        };authorize(actor,false,epoch);if(!runtime.active(binding))throw new IllegalStateException("Plugin is no longer enabled");return result;
     });}
-    public CompletableFuture<Map<String,Object>> mutate(Auth.Session actor,String id,Map<String,Object> body){Map<String,Object> input=copy(body);return submit(()->{
-        IntegrationValidation.confirmed(input);Binding binding=bind(actor,id,true);
-        Runnable guard=()->{try{authorize(actor,true);if(closed.get()||!runtime.active(binding))throw new IllegalStateException("Plugin is no longer enabled");}catch(RuntimeException e){throw e;}catch(Exception e){throw new IllegalStateException("Plugin availability check failed",e);}};
+    public CompletableFuture<Map<String,Object>> mutate(Auth.Session actor,String id,Map<String,Object> body){Map<String,Object> input=copy(body);return submit(epoch->{
+        IntegrationValidation.confirmed(input);Binding binding=bind(actor,id,true,epoch);
+        Runnable guard=()->{try{authorize(actor,true,epoch);if(closed.get()||!runtime.active(binding))throw new IllegalStateException("Plugin is no longer enabled");}catch(RuntimeException e){throw e;}catch(Exception e){throw new IllegalStateException("Plugin availability check failed",e);}};
         // Serialize local edits to each holder; provider/external edits are checked by an optimistic revision.
         String key=id+":"+input.getOrDefault("holderType","")+":"+input.getOrDefault("target",input.getOrDefault("uuid",""));
         synchronized(stripes[(key.hashCode()&Integer.MAX_VALUE)%stripes.length]){
@@ -66,8 +81,8 @@ public final class IntegrationService implements AutoCloseable {
             };
         }
     });}
-    private Binding bind(Auth.Session actor,String id,boolean write)throws Exception {
-        authorize(actor,write);for(Binding binding:bindings())if(binding.id().equals(id)){if(!binding.unavailable().isEmpty())throw new UnsupportedOperationException(binding.unavailable());if(!runtime.active(binding))throw new IllegalStateException("Plugin is disabled");return binding;}throw new IllegalStateException("Plugin is not installed or enabled");
+    private Binding bind(Auth.Session actor,String id,boolean write,long epoch)throws Exception {
+        authorize(actor,write,epoch);for(Binding binding:bindings())if(binding.id().equals(id)){if(!binding.unavailable().isEmpty())throw new UnsupportedOperationException(binding.unavailable());if(!runtime.active(binding))throw new IllegalStateException("Plugin is disabled");return binding;}throw new IllegalStateException("Plugin is not installed or enabled");
     }
     private List<Binding> bindings()throws Exception{return PunishmentProviders.exclusive(runtime.discover());}
     /** Already-enabled plugin metadata supplied on-main; no commands or database inspection. */
@@ -80,18 +95,52 @@ public final class IntegrationService implements AutoCloseable {
         catch(Exception|LinkageError e){error="Installed plugin API is unsupported or not ready";}
         return new Binding(provider.id(),name,version,api,loader,identity,error);
     }
-    private void authorize(Auth.Session actor,boolean write){if(closed.get())throw new IllegalStateException("Integrations are stopped");if(actor==null||!(write?actor.role().equals("Owner"):Set.of("Owner","Admin").contains(actor.role()))||!authority.test(actor,write))throw new SecurityException(write?"An active Owner session is required":"An active administrator session is required");}
+    private void authorize(Auth.Session actor,boolean write,long epoch){authorizeSession(actor,write);if(!enabled.get()||lifecycle.get()!=epoch)throw new IllegalStateException("Integrations module was disabled or restarted");}
+    private void authorizeSession(Auth.Session actor,boolean write){if(closed.get())throw new IllegalStateException("Integrations are stopped");if(actor==null||!(write?actor.role().equals("Owner"):Set.of("Owner","Admin").contains(actor.role()))||!authority.test(actor,write))throw new SecurityException(write?"An active Owner session is required":"An active administrator session is required");}
     private static Map<String,Object> copy(Map<String,Object> body){if(body==null||body.size()>20)throw new IllegalArgumentException("Invalid integration request");Map<String,Object> copy=new LinkedHashMap<>(body);if(copy.get("contexts") instanceof Map<?,?> contexts)copy.put("contexts",Map.copyOf(contexts));return Collections.unmodifiableMap(copy);}
     private static List<String> capabilities(Binding b){if(!b.unavailable().isEmpty())return List.of();return switch(b.id()){case "luckperms"->List.of("groups","loaded-users","user-lookup","nodes","inheritance","edit","create-group");case "coreprotect"->List.of("lookup","player-filter","block-filter","time-filter","pagination");case "advancedban"->List.of("player-punishments","issue","revoke");case "grim"->List.of("player-checks");default->List.of();};}
-    private <T> CompletableFuture<T> submit(Callable<T> operation){
+    private interface EpochOperation<T>{T call(long epoch)throws Exception;}
+    private <T> CompletableFuture<T> submit(EpochOperation<T> operation){
+        long epoch=lifecycle.get();
         AtomicInteger phase=new AtomicInteger();CompletableFuture<T> result=new CompletableFuture<>(){@Override public boolean cancel(boolean interrupt){return phase.compareAndSet(0,2)&&super.cancel(false);}};
-        if(closed.get()){result.completeExceptionally(new IllegalStateException("Integrations are stopped"));return result;}pending.add(result);result.whenComplete((v,e)->pending.remove(result));
-        try{workers.execute(()->{if(!phase.compareAndSet(0,1))return;try{if(closed.get())throw new IllegalStateException("Integrations are stopped");result.complete(operation.call());}catch(Throwable e){result.completeExceptionally(e);}});}catch(RejectedExecutionException e){result.completeExceptionally(new IllegalStateException("Integration queue is full; retry later"));}return result;
+        if(closed.get()||!enabled.get()){result.completeExceptionally(new IllegalStateException("Integrations are stopped or disabled"));return result;}pending.add(result);result.whenComplete((v,e)->pending.remove(result));
+        try{workers.execute(()->{if(!phase.compareAndSet(0,1))return;try{if(closed.get()||!enabled.get()||lifecycle.get()!=epoch)throw new IllegalStateException("Integrations are stopped or disabled");T value=operation.call(epoch);if(closed.get()||!enabled.get()||lifecycle.get()!=epoch)throw new IllegalStateException("Integration lifecycle changed; refresh before retrying");result.complete(value);}catch(Throwable e){result.completeExceptionally(e);}});}catch(RejectedExecutionException e){result.completeExceptionally(new IllegalStateException("Integration queue is full; retry later"));}return result;
     }
     @Override public void close(){closed.set(true);if(presence!=null)presence.close();workers.shutdownNow();for(CompletableFuture<?> f:pending)f.cancel(false);try{workers.awaitTermination(1500,TimeUnit.MILLISECONDS);}catch(InterruptedException e){Thread.currentThread().interrupt();}}
     private static final class BukkitRuntime implements Runtime {
         private final MainThread main;
+        private volatile List<Map<String,Object>> permissionCache=List.of();
+        private volatile long permissionCacheUntil;
+        private final AtomicLong cacheGeneration=new AtomicLong();
         BukkitRuntime(MainThread main){this.main=Objects.requireNonNull(main);}
+        public synchronized void clearCaches(){cacheGeneration.incrementAndGet();permissionCacheUntil=0;permissionCache=List.of();}
+        public List<Map<String,Object>> permissions()throws Exception {
+            if(System.nanoTime()<permissionCacheUntil)return permissionCache;
+            long generation=cacheGeneration.get();List<Map<String,Object>> found=main.await(()->{
+                Map<String,String> sources=new HashMap<>();int inspected=0;
+                for(Plugin plugin:Bukkit.getPluginManager().getPlugins()){
+                    if(!plugin.isEnabled())continue;
+                    for(org.bukkit.permissions.Permission permission:plugin.getDescription().getPermissions()){
+                        if(++inspected>PermissionSuggestions.MAX_REGISTRY)break;
+                        sources.putIfAbsent(permission.getName(),plugin.getName());
+                    }
+                    if(inspected>PermissionSuggestions.MAX_REGISTRY)break;
+                }
+                Map<String,Map<String,Object>> nodes=new TreeMap<>();int scanned=0;
+                for(org.bukkit.permissions.Permission permission:Bukkit.getPluginManager().getPermissions()){
+                    if(++scanned>PermissionSuggestions.MAX_REGISTRY||nodes.size()>=PermissionSuggestions.MAX_REGISTRY)break;
+                    String source=sources.getOrDefault(permission.getName(),"Bukkit");
+                    nodes.put(permission.getName(),Map.of("key",permission.getName(),"description",permission.getDescription(),"source",source));
+                    for(String child:permission.getChildren().keySet()){
+                        if(nodes.size()>=PermissionSuggestions.MAX_REGISTRY)break;
+                        nodes.putIfAbsent(child,Map.of("key",child,"description","","source",source));
+                    }
+                }
+                return List.copyOf(nodes.values());
+            });
+            synchronized(this){if(cacheGeneration.get()==generation){permissionCache=found;permissionCacheUntil=System.nanoTime()+TimeUnit.SECONDS.toNanos(30);}}
+            return found;
+        }
         public List<Binding> discover()throws Exception{return main.await(()->{
             List<String> names=new ArrayList<>(List.of("LuckPerms","CoreProtect","GrimAC"));PunishmentProviders.known().forEach(p->names.add(p.name()));
             List<Binding> out=new ArrayList<>();for(String name:names){

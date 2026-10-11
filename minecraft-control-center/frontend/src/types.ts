@@ -13,5 +13,5 @@ export type StreamEntry = {time?: number | string; timestamp?: number | string; 
 export type Plugin = {name: string; version: string; enabled: boolean; description?: string; authors?: string[]};
 export type Automation = {id?: string; name: string; trigger: 'join' | 'quit' | 'death' | 'interval'; intervalSeconds?: number; world?: string; action: string; params: Record<string, unknown>; enabled: boolean};
 export type Backup = {id: string; file: string; size: number; sha256: string; time: number | string; status: string};
-export type Settings = {profile: string; modules: Record<string, boolean>; host: string; port: number; performance?: Record<string, unknown>; limits?: Record<string, unknown>};
+export type Settings = {profile: string; modules: Record<string, boolean>; coreAlwaysActive?:string[]; host: string; port: number; performance?: Record<string, unknown>; limits?: Record<string, unknown>};
 export type ActionResult = {ok: boolean; result: unknown; sequence: number; pending?: boolean; id?: string};

@@ -19,14 +19,14 @@ import java.util.concurrent.atomic.*;
 
 public final class MccPlugin extends JavaPlugin {
     private volatile Database db;private volatile Auth auth;private volatile Realtime realtime;private volatile WebServer web;
-    private volatile Automation automation;private volatile Backup backup;private volatile LogTail tail;private volatile PluginStage pluginStage;
+    private volatile AutomationTriggers automationTriggers;private volatile Automation automation;private volatile Backup backup;private volatile LogTail tail;private volatile PluginStage pluginStage;
     private volatile PluginCatalog pluginCatalog;private volatile List<Map<String,Object>> catalogPlugins=List.of();private String catalogMinecraftVersion;
     private GameService game;private MainThread main;private volatile PunishmentEngine punishments;
     private volatile IntegrationService integrations;private OreMonitor oreMonitor;private KernelProfiles kernelProfiles;private RestartService restart;
     private ScheduledExecutorService background;
     private volatile Map<String,Object> latest=Map.of("status","starting");
     private volatile Map<String,Object> gameSnapshot=Map.of();
-    private final ConcurrentHashMap<String,Boolean> modules=new ConcurrentHashMap<>();
+    private volatile Map<String,Boolean> modules=Map.of();
     private volatile String profile="balanced";
     private final AtomicBoolean stopping=new AtomicBoolean(),refresh=new AtomicBoolean();
     private final ConcurrentLinkedDeque<Object> chatHistory=new ConcurrentLinkedDeque<>();
@@ -34,7 +34,7 @@ public final class MccPlugin extends JavaPlugin {
     private final long[] snapshotSamples=new long[512];private int sampleCursor,sampleSize;
     private volatile double snapshotP95;
     private int pulses;private long lastMetric, lastCleanup,lastPublishedTimestamp,lastHostMetrics;
-    private final Map<String,Object> hostMetrics=new HashMap<>();
+    private final Map<String,Object> hostMetrics=new ConcurrentHashMap<>();
     private String bind;private int port;
 
     @Override public void onEnable(){
@@ -42,16 +42,16 @@ public final class MccPlugin extends JavaPlugin {
             Files.createDirectories(getDataFolder().toPath());PrivateFiles.restrict(getDataFolder().toPath(),true);
             saveDefaultConfig();for(String directory:List.of("logs","backups","assets-cache"))Files.createDirectories(getDataFolder().toPath().resolve(directory));
             bind=getConfig().getString("web.host","127.0.0.1");port=getConfig().getInt("web.port",8080);
-            modules.put("chat",getConfig().getBoolean("modules.chat",true));modules.put("events",getConfig().getBoolean("modules.events",true));modules.put("automations",getConfig().getBoolean("modules.automations",true));modules.put("map",getConfig().getBoolean("modules.map",false));
+            Map<String,Boolean> configured=new LinkedHashMap<>();for(String key:ModulePolicy.KEYS)configured.put(key,getConfig().getBoolean("modules."+key,true));modules=Map.copyOf(configured);
             profile=getConfig().getString("performance.profile","balanced").toLowerCase(Locale.ROOT);if(!Set.of("eco","balanced","performance").contains(profile))profile="balanced";
             if(Bukkit.getName().toLowerCase(Locale.ROOT).contains("folia"))throw new IllegalArgumentException("Folia region scheduling is not supported by this build; use a Bukkit main-thread kernel");
             main=new MainThread(this);
             integrations=new IntegrationService(this,main,(actor,write)->auth!=null&&auth.session(actor.id())==actor&&(write?actor.role().equals("Owner"):Set.of("Owner","Admin").contains(actor.role())));
-            game=new GameService(this,this::gameEvent);game.externalManaged(integrations.externalPunishments());
-            oreMonitor=new OreMonitor(this,getConfig().getConfigurationSection("ore-monitor"));oreMonitor.start();
+            game=new GameService(this,this::gameEvent);game.externalManaged(integrations.externalPunishments());game.setCaptureModules(()->module("chat"),()->module("playerSnapshots"),()->module("entitySnapshots"));
+            oreMonitor=new OreMonitor(this,getConfig().getConfigurationSection("ore-monitor"));
             Path serverRoot=Path.of("").toAbsolutePath().normalize();restart=new RestartService(serverRoot);
             kernelProfiles=new KernelProfiles(serverRoot,getDataFolder().toPath(),new BukkitKernelRuntime(main),Boolean.getBoolean("mcc.launcher.profile-hook"));
-            catalogMinecraftVersion=ServerPlatform.minecraftVersion();catalogPlugins=List.copyOf(game.plugins());
+            catalogMinecraftVersion=ServerPlatform.minecraftVersion();if(module("catalog"))catalogPlugins=List.copyOf(game.plugins());
             game.setConsoleAllowedCommands(new HashSet<>(getConfig().getStringList("console.allowed-commands")));
             background=Executors.newSingleThreadScheduledExecutor(r->{Thread t=new Thread(r,"MCC-Background");t.setDaemon(true);return t;});
             background.execute(this::initialize);
@@ -63,7 +63,7 @@ public final class MccPlugin extends JavaPlugin {
         try{
             db=new Database(getDataFolder().toPath().resolve("database.db"));if(stopping.get()){db.close();return;}
             boolean localOnly=java.net.InetAddress.getByName(bind).isLoopbackAddress()&&!getConfig().getBoolean("web.allow-lan",false)&&getConfig().getString("web.public-origin","").isBlank();
-            auth=new Auth(db,getDataFolder().toPath(),getConfig().getBoolean("auth.bootstrap-admin",true),localOnly);realtime=new Realtime(auth);
+            auth=new Auth(db,getDataFolder().toPath(),getConfig().getBoolean("auth.bootstrap-admin",true),localOnly);realtime=new Realtime(auth,topic->ModulePolicy.topicAllowed(topic,this::module));
             punishments=new PunishmentEngine(this,db,main,this::gameEvent);punishments.externalManaged(integrations.externalPunishments());punishments.start().get();
             try{kernelProfiles.reconcileStartup().get(30,TimeUnit.SECONDS);}catch(Exception error){getLogger().warning("MCC kernel preset was not applied safely; use Settings to select Custom or review a compatible preset. "+error.getClass().getSimpleName());}
             List<Map<String,Object>> settings=db.documents("settings").get();if(!settings.isEmpty())loadSettings(settings.getFirst());
@@ -74,10 +74,10 @@ public final class MccPlugin extends JavaPlugin {
                 if(!punishments.muted(mute.getKey()))punishments.importLegacyMute(mute.getKey(),known.getOrDefault(mute.getKey(),mute.getKey().toString()),mute.getValue()).get();
                 db.deleteDocument("mutes",mute.getKey().toString()).get();
             }
-            main.await(()->{game.setModerationPersistence(this::persistMute);game.setMuteLookup(punishments::muted);game.restoreKnownPlayers(known);game.setEventsEnabled(module("events"));game.setMapEnabled(module("map"));return null;});
-            automation=new Automation(db,main,game);automation.setEvents(this::gameEvent);automation.enabled(module("automations"));backup=new Backup(db,getDataFolder().toPath());pluginStage=new PluginStage(db,getDataFolder().toPath());
-            pluginCatalog=new PluginCatalog(db,getDataFolder().toPath(),catalogMinecraftVersion,()->catalogPlugins);
-            tail=new LogTail(Path.of("logs","latest.log"),realtime);gameSnapshot=main.await(game::snapshot);publishSnapshot();
+            main.await(()->{game.setModerationPersistence(this::persistMute);game.setMuteLookup(punishments::muted);game.restoreKnownPlayers(known);game.setEventsEnabled(module("events"));game.setMapEnabled(module("map"));game.setSnapshotModules(module("playerSnapshots"),module("entitySnapshots"),module("metrics"));oreMonitor.enabled(module("oreMonitor"));return null;});
+            automation=new Automation(db,main,game);automation.setEvents(this::gameEvent);automation.enabled(module("automations"));main.await(()->{if(module("automations"))automationTriggers=new AutomationTriggers(this,automation);return null;});backup=new Backup(db,getDataFolder().toPath());pluginStage=new PluginStage(db,getDataFolder().toPath());
+            integrations.setEnabled(module("integrations"));if(module("catalog"))pluginCatalog=new PluginCatalog(db,getDataFolder().toPath(),catalogMinecraftVersion,()->catalogPlugins);
+            if(module("console"))tail=new LogTail(Path.of("logs","latest.log"),realtime);gameSnapshot=main.await(game::snapshot);publishSnapshot();
             if(stopping.get()){closeServices();return;}
             web=new WebServer(this,auth,db,main,game,realtime,bind,port,getConfig().getBoolean("web.allow-lan",false),getConfig().getString("web.public-origin",""),getConfig().getBoolean("web.secure-cookie",false));
             getLogger().info("Minecraft Control Center enabled!");getLogger().info("Dashboard: http://localhost:"+port);
@@ -92,7 +92,7 @@ public final class MccPlugin extends JavaPlugin {
         if(ServerPlatform.lowTps())interval=Math.max(interval,5);
         if(realtime==null||!realtime.subscribers("state"))interval=Math.max(interval,10);
         if(pulses%interval!=0&&!refresh.getAndSet(false))return;
-        long start=System.nanoTime();try{gameSnapshot=game.snapshot();catalogPlugins=List.copyOf(game.plugins());}catch(Exception e){getLogger().warning("MCC snapshot failed: "+e.getClass().getSimpleName());}
+        long start=System.nanoTime();try{gameSnapshot=game.snapshot();if(module("catalog"))catalogPlugins=List.copyOf(game.plugins());}catch(Exception e){getLogger().warning("MCC snapshot failed: "+e.getClass().getSimpleName());}
         long nanos=System.nanoTime()-start;snapshotCount.incrementAndGet();snapshotNanos.addAndGet(nanos);
         synchronized(snapshotSamples){snapshotSamples[sampleCursor++%512]=nanos;sampleSize=Math.min(512,sampleSize+1);long[] sorted=Arrays.copyOf(snapshotSamples,sampleSize);Arrays.sort(sorted);snapshotP95=sorted[(int)Math.floor((sampleSize-1)*.95)]/1e6;}
     }
@@ -100,17 +100,17 @@ public final class MccPlugin extends JavaPlugin {
         if(stopping.get())return;try{
             publishSnapshot();auth.cleanup();if(tail!=null&&realtime.subscribers("console"))tail.pulse();if(punishments!=null)punishments.pulse().exceptionally(error->{getLogger().warning("MCC punishment synchronization deferred: "+error.getClass().getSimpleName());return null;});
             if(automation!=null&&module("automations"))automation.pulse();
-            long now=System.currentTimeMillis();if(now-lastMetric>=10000){lastMetric=now;db.metric(latest);}
+            long now=System.currentTimeMillis();if(module("metrics")&&now-lastMetric>=10000){lastMetric=now;db.metric(latest);}
             if(now-lastCleanup>=3600000){lastCleanup=now;db.cleanup(getConfig().getInt("storage.retention-days",7));}
         }catch(Exception e){getLogger().warning("MCC background task failed: "+e.getClass().getSimpleName());}
     }
-    private void publishSnapshot(){
-        Map<String,Object> data=new LinkedHashMap<>(gameSnapshot);data.put("status","online");
-        long now=System.currentTimeMillis();if(now-lastHostMetrics>=5000){lastHostMetrics=now;
-            if(ManagementFactory.getOperatingSystemMXBean() instanceof OperatingSystemMXBean os){double cpu=os.getProcessCpuLoad();hostMetrics.put("cpu",cpu<0?null:cpu*100);hostMetrics.put("systemRamUsed",os.getTotalMemorySize()-os.getFreeMemorySize());hostMetrics.put("systemRamTotal",os.getTotalMemorySize());}
+    private synchronized void publishSnapshot(){
+        Map<String,Object> data=new LinkedHashMap<>(ModulePolicy.filterSnapshot(gameSnapshot,this::module));data.put("status","online");data.put("modules",Map.copyOf(modules));
+        long now=System.currentTimeMillis();if(module("metrics")&&now-lastHostMetrics>=5000){lastHostMetrics=now;
+            if(ManagementFactory.getOperatingSystemMXBean() instanceof OperatingSystemMXBean os){double cpu=os.getProcessCpuLoad();if(cpu<0)hostMetrics.remove("cpu");else hostMetrics.put("cpu",cpu*100);hostMetrics.put("systemRamUsed",os.getTotalMemorySize()-os.getFreeMemorySize());hostMetrics.put("systemRamTotal",os.getTotalMemorySize());}
             try{var disk=Files.getFileStore(getDataFolder().toPath());hostMetrics.put("diskUsed",disk.getTotalSpace()-disk.getUsableSpace());hostMetrics.put("diskTotal",disk.getTotalSpace());}catch(Exception ignored){}
-        }data.putAll(hostMetrics);
-        data.put("mcc",performance());latest=Collections.unmodifiableMap(data);
+        }if(module("metrics"))data.putAll(hostMetrics);
+        data.put("mcc",performance());latest=ModulePolicy.filterSnapshot(data,this::module);
         long captured=((Number)data.getOrDefault("timestamp",0)).longValue();
         if(realtime!=null&&realtime.subscribers("state")&&captured!=lastPublishedTimestamp){lastPublishedTimestamp=captured;realtime.publish("state",latest);}
     }
@@ -124,9 +124,9 @@ public final class MccPlugin extends JavaPlugin {
             if(database!=null&&context.containsKey("name"))database.document("known-players",(String)context.get("uuid"),context);
             refreshSoon();return;
         }
-        if(topic.equals("timeline")&&database!=null)database.audit("minecraft","game.event","ok",data instanceof Map<?,?>?data:Map.of("event",data));
+        if(topic.equals("timeline")&&module("timeline")&&database!=null)database.audit("minecraft","game.event","ok",data instanceof Map<?,?>?data:Map.of("event",data));
         String wireTopic=switch(topic){case "event"->"events";case "join","quit","death"->"players";case "player"->"inspector";default->topic;};
-        if(bus!=null)bus.publish(wireTopic,data);
+        if(bus!=null&&ModulePolicy.topicAllowed(wireTopic,this::module))bus.publish(wireTopic,data);
         if(Set.of("players","world","events","spawn").contains(topic))refreshSoon();
     }
     public void refreshSoon(){refresh.set(true);}
@@ -155,7 +155,7 @@ public final class MccPlugin extends JavaPlugin {
     }
     public List<?> consoleHistory(){return tail==null?List.of():tail.history();}
     public List<?> chatHistory(){return new ArrayList<>(chatHistory);}
-    public Map<String,Object> settings(){return Map.of("profile",profile,"modules",Map.copyOf(modules),"host",bind,"port",port,"performance",performance(),"limits",Map.of("websocketConnections",16,"httpQueue",64,"gameQueue",256,"spawnPerTick",5,"activeEvents",3),"restartRequired",List.of("web.host","web.port","web.public-origin","web.secure-cookie"));}
+    public Map<String,Object> settings(){return Map.of("profile",profile,"modules",Map.copyOf(modules),"coreAlwaysActive",List.of("authentication","health","settings","backups","retention-cleanup","external-punishment-ownership"),"host",bind,"port",port,"performance",performance(),"limits",Map.of("websocketConnections",16,"httpQueue",64,"gameQueue",256,"spawnPerTick",5,"activeEvents",3),"restartRequired",List.of("web.host","web.port","web.public-origin","web.secure-cookie"));}
     private Map<String,Object> performance(){
         Map<String,Object> data=new LinkedHashMap<>();long count=snapshotCount.get();data.put("snapshotTasks",count);data.put("snapshotMeanMs",count==0?0:snapshotNanos.get()/1e6/count);data.put("snapshotP95Ms",snapshotP95);data.put("method","Wall-clock main-thread snapshots and dispatched actions; CPU is entire JVM, not MCC alone");
         if(main!=null){MainThread.MapStats s=main.stats();data.put("gameQueue",s.pending());data.put("actionTasks",s.tasks());data.put("actionMeanMs",s.meanMs());data.put("actionMaxMs",s.maxMs());}
@@ -163,14 +163,16 @@ public final class MccPlugin extends JavaPlugin {
     }
     @SuppressWarnings("unchecked") private void loadSettings(Map<String,Object> body){
         String candidate=Json.text(body,"profile",profile);if(!Set.of("eco","balanced","performance").contains(candidate))throw new IllegalArgumentException("Unknown performance profile");profile=candidate;
-        Object values=body.get("modules");if(values instanceof Map<?,?> map)for(String key:List.of("chat","events","automations","map"))if(map.get(key) instanceof Boolean enabled)modules.put(key,enabled);
+        modules=ModulePolicy.updated(modules,body.get("modules"));
     }
     public synchronized Map<String,Object> updateSettings(Map<String,Object> body)throws Exception{
         String candidate=Json.text(body,"profile",profile);if(!Set.of("eco","balanced","performance").contains(candidate))throw new IllegalArgumentException("Unknown performance profile");
-        Map<String,Object> saved=new LinkedHashMap<>();saved.put("profile",candidate);Map<String,Boolean> proposed=new HashMap<>(modules);
-        if(body.get("modules") instanceof Map<?,?> values){for(var e:values.entrySet()){if(!proposed.containsKey(e.getKey())||!(e.getValue() instanceof Boolean))throw new IllegalArgumentException("Unknown module or invalid value");proposed.put((String)e.getKey(),(Boolean)e.getValue());}}
+        Map<String,Object> saved=new LinkedHashMap<>();saved.put("profile",candidate);Map<String,Boolean> proposed=ModulePolicy.updated(modules,body.get("modules"));
         saved.put("modules",proposed);db.document("settings","runtime",saved).get();loadSettings(saved);
-        if(automation!=null)automation.enabled(module("automations"));main.await(()->{game.setEventsEnabled(module("events"));game.setMapEnabled(module("map"));return null;});if(!module("chat"))chatHistory.clear();refreshSoon();return settings();
+        if(automation!=null)automation.enabled(module("automations"));if(integrations!=null)integrations.setEnabled(module("integrations"));
+        if(!module("catalog")){PluginCatalog old=pluginCatalog;pluginCatalog=null;if(old!=null)old.close();catalogPlugins=List.of();}else if(pluginCatalog==null)pluginCatalog=new PluginCatalog(db,getDataFolder().toPath(),catalogMinecraftVersion,()->catalogPlugins);
+        if(!module("console"))tail=null;else if(tail==null)tail=new LogTail(Path.of("logs","latest.log"),realtime);if(!module("metrics"))hostMetrics.clear();
+        if(realtime!=null)realtime.modulesChanged();lastPublishedTimestamp=-1;gameSnapshot=ModulePolicy.filterSnapshot(gameSnapshot,this::module);latest=ModulePolicy.filterSnapshot(latest,this::module);main.await(()->{if(!module("automations")){AutomationTriggers old=automationTriggers;automationTriggers=null;if(old!=null)old.close();}else if(automationTriggers==null)automationTriggers=new AutomationTriggers(this,automation);game.setEventsEnabled(module("events"));game.setMapEnabled(module("map"));game.setSnapshotModules(module("playerSnapshots"),module("entitySnapshots"),module("metrics"));oreMonitor.enabled(module("oreMonitor"));return null;});if(!module("chat"))chatHistory.clear();publishSnapshot();refreshSoon();return settings();
     }
     private boolean command(CommandSender sender,Command command,String label,String[] args){
         if(args.length>0&&Set.of("punish","revoke","history").contains(args[0].toLowerCase(Locale.ROOT))){if(punishments==null){sender.sendMessage("Punishments are starting");return true;}return punishments.handleCommand(sender,args);}
@@ -180,7 +182,7 @@ public final class MccPlugin extends JavaPlugin {
     private void closeSafely(String name,Runnable close){try{close.run();}catch(Exception error){getLogger().warning("MCC cleanup failed for "+name+": "+error.getClass().getSimpleName());}}
     private void closeServices(){Automation a=automation;automation=null;if(a!=null)closeSafely("automation",a::close);WebServer w=web;web=null;if(w!=null)closeSafely("web",w::close);PluginCatalog c=pluginCatalog;pluginCatalog=null;if(c!=null)closeSafely("catalog",c::close);PunishmentEngine p=punishments;punishments=null;if(p!=null)closeSafely("punishments",p::close);Realtime r=realtime;realtime=null;if(r!=null)closeSafely("realtime",r::close);Database d=db;db=null;if(d!=null)closeSafely("database",d::close);}
     @Override public void onDisable(){
-        stopping.set(true);if(kernelProfiles!=null)closeSafely("kernel presets",kernelProfiles::close);if(oreMonitor!=null)closeSafely("ore monitor",oreMonitor::close);IntegrationService integration=integrations;integrations=null;if(integration!=null)closeSafely("integrations",integration::close);Automation a=automation;automation=null;if(a!=null)closeSafely("automation",a::close);if(main!=null)closeSafely("main-thread queue",main::close);if(game!=null)closeSafely("game",game::close);Bukkit.getScheduler().cancelTasks(this);
+        stopping.set(true);AutomationTriggers triggers=automationTriggers;automationTriggers=null;if(triggers!=null)closeSafely("automation listeners",triggers::close);if(kernelProfiles!=null)closeSafely("kernel presets",kernelProfiles::close);if(oreMonitor!=null)closeSafely("ore monitor",oreMonitor::close);IntegrationService integration=integrations;integrations=null;if(integration!=null)closeSafely("integrations",integration::close);Automation a=automation;automation=null;if(a!=null)closeSafely("automation",a::close);if(main!=null)closeSafely("main-thread queue",main::close);if(game!=null)closeSafely("game",game::close);Bukkit.getScheduler().cancelTasks(this);
         if(background!=null)background.shutdownNow();closeServices();getLogger().info("Minecraft Control Center stopped; resources released.");
     }
 }

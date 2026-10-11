@@ -21,7 +21,7 @@ export default function Shell({page, changeLang, profile, logout, children}: {
   const [menu, setMenu] = useState(false);
   const [commands, setCommands] = useState(false);
   const [query, setQuery] = useState('');
-  const entries = availablePages(app.auth.user?.role ?? 'Viewer',app.integrationIds);
+  const entries = availablePages(app.auth.user?.role ?? 'Viewer',app.integrationIds,app.modules);
   const title = pages.find(item => item.id === page);
   const results = entries.filter(item => item[app.lang].toLowerCase().includes(query.toLowerCase()));
   useEffect(() => {

@@ -5,9 +5,10 @@ import java.util.*;
 
 /** Pure bounded graph validation; game registry lookups happen only on the game thread. */
 public final class AutomationGraph {
-    public static final Set<String> ACTIONS=Set.of("chat.broadcast","player.message","player.give","player.title","player.actionbar","player.sound","player.effect","player.firework","world.time","world.weather");
-    public static final Set<String> TRIGGERS=Set.of("join","quit","death","interval");
-    public static final Set<String> CONDITIONS=Set.of("onlineCount","tps","playerOnline","worldTime","weather");
+    public static final Set<String> ACTIONS=Set.of("chat.broadcast","player.message","player.give","player.title","player.actionbar","player.sound","player.effect","player.firework","world.time","world.weather","player.heal","player.feed","player.xp","player.level","player.extinguish","player.glowing","player.particles","player.teleport","world.difficulty","world.pvp","world.gamerule","event.start","event.stop","event.pause");
+    public static final Set<String> TRIGGERS=Set.of("join","quit","death","interval","respawn","worldChange","advancement","mobKill","blockBreak","blockPlace","bedEnter","levelChange","weatherChange","eventComplete");
+    public static final Set<String> CONDITIONS=Set.of("onlineCount","tps","playerOnline","worldTime","weather","worldPlayers","difficulty","environment","pvp","playerHealth","playerFood","playerLevel","playerGamemode","playerPermission","playerHasItem","playerEffect","playerBiome","playerY","playerDistance","chance");
+    public static final String DEFAULT_PROFILE="00000000-0000-4000-8000-000000000001";
     private static final Set<String> NUMERIC_OPS=Set.of("eq","ne","lt","lte","gt","gte");
     public record Node(String id,String type,Map<String,Object> config) {}
     public record Edge(String id,String source,String target,String handle) {}
@@ -62,7 +63,7 @@ public final class AutomationGraph {
         if(order.size()!=nodes.size())throw new IllegalArgumentException("Graph contains a cycle");
         Set<String> reachable=new HashSet<>();reachable.add(root);for(Node n:order)if(reachable.contains(n.id))for(Edge e:edges)if(e.source.equals(n.id))reachable.add(e.target);
         if(reachable.size()!=nodes.size())throw new IllegalArgumentException("Every node must be reachable from the trigger");
-        Map<String,Object> document=new LinkedHashMap<>();document.put("id",id);document.put("name",name);document.put("enabled",enabled);document.put("world",world);document.put("cooldownSeconds",cooldown);document.put("graphVersion",1);document.put("nodes",normalizedNodes);document.put("edges",normalizedEdges);
+        Map<String,Object> document=new LinkedHashMap<>();document.put("id",id);document.put("profileId",uuid(text(body,"profileId",DEFAULT_PROFILE,36)));document.put("name",name);document.put("enabled",enabled);document.put("world",world);document.put("cooldownSeconds",cooldown);document.put("graphVersion",1);document.put("nodes",normalizedNodes);document.put("edges",normalizedEdges);
         return new Compiled(Collections.unmodifiableMap(document),List.copyOf(order),List.copyOf(edges),trigger,interval);
     }
 
@@ -81,9 +82,17 @@ public final class AutomationGraph {
 
     private static void validateCondition(Map<String,Object> config){
         String condition=text(config,"condition","",32),operator=text(config,"operator","eq",8);if(operator.equals("neq"))operator="ne";if(!CONDITIONS.contains(condition))throw new IllegalArgumentException("Unsupported condition");
-        if(condition.equals("weather")){if(!Set.of("eq","ne").contains(operator)||!Set.of("clear","rain","thunder").contains(text(config,"value","",8)))throw new IllegalArgumentException("Invalid weather comparison");}
-        else if(condition.equals("playerOnline")){if(!Set.of("eq","ne").contains(operator))throw new IllegalArgumentException("Invalid online comparison");bool(config.get("value"),"condition value");}
-        else{if(!NUMERIC_OPS.contains(operator))throw new IllegalArgumentException("Invalid comparison operator");if(condition.equals("tps"))number(config.get("value"),0,20,"condition value");else integer(config.get("value"),0,condition.equals("worldTime")?23999:100000,"condition value");}
+        if(Set.of("weather","difficulty","environment","playerGamemode","playerBiome").contains(condition)){
+            if(!Set.of("eq","ne").contains(operator))throw new IllegalArgumentException("Invalid text comparison");String value=text(config,"value","",150);if(value.isBlank())throw new IllegalArgumentException("Condition value required");
+            Set<String> options=switch(condition){case "weather"->Set.of("clear","rain","thunder");case "difficulty"->Set.of("PEACEFUL","EASY","NORMAL","HARD");case "environment"->Set.of("NORMAL","NETHER","THE_END","CUSTOM");case "playerGamemode"->Set.of("SURVIVAL","CREATIVE","ADVENTURE","SPECTATOR");default->Set.of();};if(!options.isEmpty()&&!options.contains(value))throw new IllegalArgumentException("Invalid condition choice");
+        }else if(Set.of("playerOnline","pvp","playerPermission","playerHasItem","playerEffect","chance").contains(condition)){
+            if(!Set.of("eq","ne").contains(operator))throw new IllegalArgumentException("Invalid boolean comparison");bool(config.get("value"),"condition value");
+        }else{if(!NUMERIC_OPS.contains(operator))throw new IllegalArgumentException("Invalid comparison operator");double max=condition.equals("tps")?20:condition.equals("worldTime")?23999:condition.equals("playerFood")?20:condition.equals("playerDistance")?30000000:100000;number(config.get("value"),condition.equals("playerY")?-2048:0,max,"condition value");}
+        if(condition.equals("playerPermission")){String permission=text(config,"permission","",150);if(!permission.matches("[a-zA-Z0-9_.*-]+"))throw new IllegalArgumentException("Invalid permission");}
+        if(condition.equals("playerHasItem")){requiredText(config,"material",100);config.put("amount",integer(config.getOrDefault("amount",1),1,2304,"amount"));}
+        if(condition.equals("playerEffect"))requiredText(config,"effect",100);
+        if(condition.equals("chance"))config.put("percent",number(config.getOrDefault("percent",50),0,100,"percent"));
+        if(condition.equals("playerDistance"))for(String coordinate:List.of("x","y","z"))number(config.get(coordinate),-30000000,30000000,coordinate);
         if(config.containsKey("world"))text(config,"world","",100);if(config.containsKey("uuid"))uuid(text(config,"uuid","",36));config.put("operator",operator);
     }
     public static boolean compare(Object actual,String operator,Object expected){
@@ -104,12 +113,25 @@ public final class AutomationGraph {
             case "world.weather" -> {if(!Set.of("clear","rain","thunder").contains(text(p,"weather","",8)))throw new IllegalArgumentException("Invalid weather");optionalNumber(p,"durationTicks",20,240000,true);}
             case "player.give" -> {Map<String,Object> item=map(p.get("item"),"item");requiredText(item,"material",100);optionalNumber(item,"amount",1,64,true);text(item,"name","",200);if(item.containsKey("lore"))for(Object line:list(item.get("lore"),0,20,"lore"))if(!(line instanceof String s)||s.length()>300)throw new IllegalArgumentException("Invalid lore");optionalNumber(item,"damage",0,100000,true);if(item.containsKey("unbreakable"))bool(item.get("unbreakable"),"unbreakable");if(item.containsKey("enchantments")){Map<String,Object> ench=map(item.get("enchantments"),"enchantments");if(ench.size()>20)throw new IllegalArgumentException("Too many enchantments");for(var e:ench.entrySet()){if(e.getKey().length()>100)throw new IllegalArgumentException("Invalid enchantment");integer(e.getValue(),1,255,"enchantment level");}}if(item.containsKey("flags"))for(Object flag:list(item.get("flags"),0,15,"flags"))if(!(flag instanceof String s)||s.length()>100)throw new IllegalArgumentException("Invalid flag");if(item.containsKey("attributes"))for(Object attribute:list(item.get("attributes"),0,12,"attributes")){Map<String,Object> attr=map(attribute,"attribute");requiredText(attr,"attribute",100);number(attr.get("amount"),-100,100,"attribute amount");if(!Set.of("ADD_NUMBER","ADD_SCALAR","MULTIPLY_SCALAR_1").contains(text(attr,"operation","",32)))throw new IllegalArgumentException("Invalid attribute operation");}}
             case "player.firework" -> {}
+            case "player.heal" -> optionalNumber(p,"amount",0,2048,false);
+            case "player.feed" -> {optionalNumber(p,"food",0,20,true);optionalNumber(p,"saturation",0,20,false);}
+            case "player.xp" -> integer(p.get("amount"),0,100000,"amount");
+            case "player.level" -> integer(p.get("level"),0,10000,"level");
+            case "player.extinguish" -> {}
+            case "player.glowing" -> bool(p.get("enabled"),"enabled");
+            case "player.particles" -> {requiredText(p,"particle",100);optionalNumber(p,"count",1,100,true);}
+            case "player.teleport" -> {for(String key:List.of("x","y","z"))number(p.get(key),-30000000,30000000,key);}
+            case "world.difficulty" -> {if(!Set.of("PEACEFUL","EASY","NORMAL","HARD").contains(text(p,"difficulty","",16)))throw new IllegalArgumentException("Invalid difficulty");}
+            case "world.pvp" -> bool(p.get("enabled"),"enabled");
+            case "world.gamerule" -> {requiredText(p,"rule",100);Object value=p.get("value");if(!(value instanceof Boolean))integer(value,0,1000000,"value");}
+            case "event.start" -> dev.mcc.game.GameEventSpec.normalize(p);
+            case "event.stop","event.pause" -> {boolean last=bool(p.getOrDefault("fromLastEvent",false),"fromLastEvent"),trigger=bool(p.getOrDefault("fromTrigger",false),"fromTrigger");if(last&&trigger||(last||trigger)&&(p.containsKey("eventId")||p.containsKey("id")))throw new IllegalArgumentException("Choose exactly one event id source");if(!last&&!trigger){if(p.containsKey("eventId"))uuid(text(p,"eventId","",36));else if(p.containsKey("id"))uuid(text(p,"id","",36));else throw new IllegalArgumentException("Event id required");}if(action.equals("event.pause"))bool(p.getOrDefault("paused",true),"paused");}
             default -> throw new IllegalArgumentException("Unsupported automation action");
         }
         for(Object value:p.values())if(value instanceof Number n&&!Double.isFinite(n.doubleValue()))throw new IllegalArgumentException("Non-finite action parameter");
     }
-    public static Map<String,Object> catalog(){return Map.of("graphVersion",1,"triggers",TRIGGERS.stream().sorted().toList(),"conditions",CONDITIONS.stream().sorted().toList(),"actions",ACTIONS.stream().sorted().toList(),"operators",NUMERIC_OPS.stream().sorted().toList(),"limits",Map.of("nodes",32,"edges",64,"delaySeconds",60,"totalDelaySeconds",60,"rules",100,"concurrentRuns",4,"history",200),"edgeHandles",Map.of("condition",List.of("true","false"),"other",List.of("next")),"execution","Topological order; selected branches activate their targets; merged nodes execute once");}
-    public static Map<String,Object> context(Map<String,Object> body){Map<String,Object> out=new LinkedHashMap<>();if(body==null)return out;if(body.containsKey("uuid"))out.put("uuid",uuid(text(body,"uuid","",36)));if(body.containsKey("world"))out.put("world",text(body,"world","",100));if(body.containsKey("name"))out.put("name",text(body,"name","",100));return out;}
+    public static Map<String,Object> catalog(){return Map.of("graphVersion",1,"triggers",TRIGGERS.stream().sorted().toList(),"conditions",CONDITIONS.stream().sorted().toList(),"actions",ACTIONS.stream().sorted().toList(),"operators",NUMERIC_OPS.stream().sorted().toList(),"limits",Map.of("nodes",32,"edges",64,"totalDelaySeconds",60,"rules",100,"profiles",20,"concurrentRuns",4,"history",200,"queuedSignals",128,"operationsPer250ms",8,"minimumCooldownSeconds",30),"edgeHandles",Map.of("condition",List.of("true","false"),"other",List.of("next")),"execution","Every enabled profile remains active; topological order; merged nodes execute once; cancelled runs never resume");}
+    public static Map<String,Object> context(Map<String,Object> body){Map<String,Object> out=new LinkedHashMap<>();if(body==null)return out;if(body.containsKey("uuid"))out.put("uuid",uuid(text(body,"uuid","",36)));for(String key:List.of("world","name","material","mob","advancement","preset"))if(body.containsKey(key))out.put(key,text(body,key,"",150));if(body.containsKey("eventId"))out.put("eventId",uuid(text(body,"eventId","",36)));if(body.containsKey("level"))out.put("level",integer(body.get("level"),0,100000,"level"));return out;}
     public static String uuid(String value){try{String canonical=UUID.fromString(value).toString();if(!canonical.equals(value))throw new IllegalArgumentException();return canonical;}catch(Exception e){throw new IllegalArgumentException("Canonical UUID required");}}
     static Map<String,Object> map(Object value,String key){if(!(value instanceof Map<?,?> raw))throw new IllegalArgumentException("Invalid "+key);Map<String,Object> out=new LinkedHashMap<>();for(var entry:raw.entrySet()){if(!(entry.getKey() instanceof String k))throw new IllegalArgumentException("Invalid "+key);out.put(k,entry.getValue());}return out;}
     static List<?> list(Object value,int min,int max,String key){if(!(value instanceof List<?> list)||list.size()<min||list.size()>max)throw new IllegalArgumentException("Invalid "+key+" size");return list;}

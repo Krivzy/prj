@@ -1,3 +1,4 @@
+import {pageEnabled} from './module-view.ts';
 import type {Page} from './context';
 
 export const pages: {id: Page; ru: string; en: string; group: number}[] = [
@@ -20,9 +21,9 @@ export const pages: {id: Page; ru: string; en: string; group: number}[] = [
   {id:'settings', ru:'Настройки', en:'Settings', group:2},
 ];
 
-export function availablePages(role: string, integrations: string[] = []) {
+export function availablePages(role: string, integrations: string[] = [], modules:Record<string,boolean> = {}) {
   const lower = role.toLowerCase();
-  return pages.filter(item =>
+  return pages.filter(item => pageEnabled(modules,item.id) &&
     !(['luckperms','coreprotect','advancedban'].includes(item.id) && !integrations.includes(item.id)) &&
     !(['luckperms','coreprotect','advancedban','ores'].includes(item.id) && !['owner','admin'].includes(lower)) &&
     !(['console','plugins','automations'].includes(item.id) && !['owner','admin'].includes(lower)) &&

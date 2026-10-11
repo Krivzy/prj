@@ -13,3 +13,7 @@ test('Custom plan must preserve all kernel files and cannot silently apply live 
 test('Typed review values never stringify arbitrary objects or missing settings as config content',()=>{
   assert.equal(kernelProfileValue(false),'false');assert.equal(kernelProfileValue(8),'8');assert.equal(kernelProfileValue('VANILLA'),'VANILLA');assert.equal(kernelProfileValue(null),'—');assert.equal(kernelProfileValue({unrelated:'value'}),'—');
 });
+test('Maximum optimization cannot confirm a plan that lowers distance files or invokes distance setters',()=>{
+  const maximum={...plan,profile:'maximum-optimized',customPreservesFiles:false,preservesDistances:true,files:[{path:'spigot.yml',changes:[{key:'world-settings.default.nerf-spawner-mobs',before:false,after:true}]}]};
+  assert.equal(canApplyKernelProfile(true,maximum,1000),true);assert.equal(canApplyKernelProfile(true,{...maximum,liveDistances:true},1000),false);assert.equal(canApplyKernelProfile(true,{...maximum,preservesDistances:false},1000),false);assert.equal(canApplyKernelProfile(true,{...maximum,files:[{path:'server.properties',changes:[]}]},1000),false);assert.equal(canApplyKernelProfile(true,{...maximum,files:[{path:'spigot.yml',changes:[{key:'world-settings.default.view-distance',after:4}]}]},1000),false);
+});

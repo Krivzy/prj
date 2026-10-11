@@ -5,7 +5,8 @@ import {ApiError, execute, post, request, setAuth} from './api';
 import {AppContext,useResource} from './context';
 import type {Page} from './context';
 import {connectLive, refreshLive, resetLive, useLive} from './live';
-import type {Auth} from './types';
+import {pageEnabled} from './module-view';
+import type {Auth,Settings} from './types';
 import {Button, Icon, Loading, Modal} from './ui';
 import {GameImage} from './assets';
 import {canExecute} from './policy';
@@ -33,9 +34,13 @@ export default function App() {
   const live = useLive();
   const reduce = useReducedMotion();
   const restarting=useServerRestart();
-  const integrations=useResource<{items:{id:string}[]}>(auth?.authenticated&&['Owner','Admin'].includes(auth.user?.role??'')?'/api/integrations':null);
+  const settings=useResource<Settings>(auth?.authenticated?'/api/settings':null);
+  const modules=(live.snapshot?.modules as Record<string,boolean>|undefined)??settings.data?.modules??{};
+  const integrations=useResource<{items:{id:string}[]}>(auth?.authenticated&&modules.integrations!==false&&['Owner','Admin'].includes(auth.user?.role??'')?'/api/integrations':null);
   const integrationIds=integrations.data?.items.map(item=>item.id)??[];
-  useEffect(()=>{if(!auth?.authenticated||!['Owner','Admin'].includes(auth.user?.role??''))return;const timer=setInterval(()=>{if(!document.hidden)integrations.reload();},30000);return()=>clearInterval(timer);},[auth?.authenticated,auth?.user?.role]);
+  useEffect(()=>{if(!auth?.authenticated||modules.integrations===false||!['Owner','Admin'].includes(auth.user?.role??''))return;const timer=setInterval(()=>{if(!document.hidden)integrations.reload();},30000);return()=>clearInterval(timer);},[auth?.authenticated,auth?.user?.role,modules.integrations]);
+  useEffect(()=>{const changed=()=>settings.reload();window.addEventListener('mcc-settings-changed',changed);return()=>window.removeEventListener('mcc-settings-changed',changed);},[auth?.authenticated]);
+  useEffect(()=>{if(!pageEnabled(modules,page))setPage('dashboard');},[modules,page]);
   const t = (ru:string,en:string) => lang === 'ru' ? ru : en;
   const notify = useCallback((text:string, error=false) => {
     const id = Date.now() + Math.random();
@@ -53,7 +58,7 @@ export default function App() {
   }
   function closeConfirm(yes:boolean) {activeConfirmation.current?.resolve(yes); activeConfirmation.current = null; setConfirmation(null);}
   function navigate(next:Page) {
-    if (!availablePages(auth?.user?.role ?? 'Viewer',integrationIds).some(item => item.id === next)) return;
+    if (!availablePages(auth?.user?.role ?? 'Viewer',integrationIds,modules).some(item => item.id === next)) return;
     setPage(next);
     window.scrollTo({top:0, behavior:'instant'});
     requestAnimationFrame(() => document.getElementById('main')?.focus({preventScroll:true}));
@@ -105,7 +110,7 @@ export default function App() {
   if (!auth) return <main className="boot"><Brand/><span className="boot-cube"/><h1>{t('Открываем твой мир…','Opening your world…')}</h1>{authError ? <><p role="alert">{authError}</p><Button onClick={() => setAuthRevision(value => value+1)}>{t('Повторить','Retry')}</Button></> : <span className="pixel-loader"/>}</main>;
   if (!auth.authenticated) return <Login status={auth} onAuth={setAuthState} lang={lang} changeLang={() => setLang(value => value === 'ru' ? 'en' : 'ru')}/>;
   const role = auth.user?.role?.toLowerCase() ?? 'viewer';
-  return <AppContext.Provider value={{auth,integrationIds,lang,t,navigate,action,confirm,notify,readonly:role === 'viewer',administrator:['owner','admin'].includes(role),owner:role === 'owner'}}>
+  return <AppContext.Provider value={{auth,integrationIds,modules,lang,t,navigate,action,confirm,notify,readonly:role === 'viewer',administrator:['owner','admin'].includes(role),owner:role === 'owner'}}>
     <Shell page={page} changeLang={() => setLang(value => value === 'ru' ? 'en' : 'ru')} profile={() => setProfile(true)} logout={() => void logout()}>
       <main id="main" className="main-content" tabIndex={-1}>
         {auth.defaultPassword&&<div className="default-password-note"><span>{t('Используется стартовый пароль. Смените его в профиле перед удалённым доступом.','You are using the initial password. Change it in your profile before remote access.')}</span><Button onClick={()=>setProfile(true)}>{t('Мой профиль','My account')}</Button></div>}

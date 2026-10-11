@@ -71,6 +71,7 @@ public final class WebServer implements AutoCloseable {
             if(s==null){respond(e,401,Map.of("error","unauthorized","message","Sign in first"));return;}
             if(s.defaultPassword()&&!(localDefaultMode&&e.getSourceAddress().getAddress().isLoopbackAddress()))throw new SecurityException("Change the initial password locally before remote access");
             if(retiredMapEndpoint(path)){respond(e,410,Map.of("error","feature_removed","message","Карта доступна через постоянные PNG-тайлы; прежние маршруты и строительство удалены"));return;}
+            ModulePolicy.require(ModulePolicy.routeModule(path),plugin::module);
             if(!get&&!Auth.constant(e.getRequestHeaders().getFirst(CSRF),s.csrf()))throw new SecurityException("CSRF token is missing or invalid");
             if(get&&path.equals("/api/map/images/tile")){
                 mapEnabled();active(s);SavedImageMap.Tile image=game.mapImageTile(query(e,"world",""),Integer.parseInt(query(e,"level","0")),Integer.parseInt(query(e,"x","0")),Integer.parseInt(query(e,"y","0")));
@@ -89,13 +90,15 @@ public final class WebServer implements AutoCloseable {
             }
             Object response;
             if(get){response=get(path,e,s);}else if(post){response=post(path,body(e),s);}else{
-                if(path.startsWith("/api/users/")){owner(s);String name=path.substring("/api/users/".length());auth.deleteUser(s,name);db.audit(s.name(),"users.delete","ok",Map.of("username",name)).get();response=Map.of("ok",true);}
+                if(path.startsWith("/api/automations/profiles/")){admin(s);active(s);String id=path.substring("/api/automations/profiles/".length());plugin.automation().deleteProfile(id,s.name(),s.role());db.audit(s.name(),"automation.profile.delete","ok",Map.of("id",id));response=Map.of("ok",true);}
+                else if(path.startsWith("/api/users/")){owner(s);String name=path.substring("/api/users/".length());auth.deleteUser(s,name);db.audit(s.name(),"users.delete","ok",Map.of("username",name)).get();response=Map.of("ok",true);}
                 else {admin(s);if(path.startsWith("/api/automations/")){plugin.automation().delete(path.substring("/api/automations/".length()));db.audit(s.name(),"automation.delete","ok",Map.of());response=Map.of("ok",true);}else throw new IllegalArgumentException("Unknown endpoint");}
             }
+            ModulePolicy.require(ModulePolicy.routeModule(path),plugin::module);
             respond(e,response instanceof Map<?,?> map&&Boolean.TRUE.equals(map.get("pending"))?202:200,response);
         }catch(TooMany ex){e.getResponseHeaders().put(Headers.RETRY_AFTER,"60");respond(e,429,Map.of("error","rate_limit","message","Too many requests; retry shortly"));}
         catch(Exception ex){Throwable cause=ex;while((cause instanceof ExecutionException||cause instanceof CompletionException)&&cause.getCause()!=null)cause=cause.getCause();
-            int code=cause.getClass().getSimpleName().equals("RequestTooBigException")?413:cause instanceof SecurityException?403:(cause.getClass().getSimpleName().equals("InventoryConflictException")||cause.getClass().getSimpleName().equals("ProfileConflictException"))?409:cause instanceof IllegalArgumentException||cause instanceof java.util.zip.ZipException?400:cause instanceof IllegalStateException||cause instanceof UnsupportedOperationException?503:500;
+            int code=cause.getClass().getSimpleName().equals("RequestTooBigException")?413:cause instanceof SecurityException?403:(cause instanceof dev.mcc.integration.PermissionConflictException||cause.getClass().getSimpleName().equals("InventoryConflictException")||cause.getClass().getSimpleName().equals("ProfileConflictException"))?409:cause instanceof IllegalArgumentException||cause instanceof java.util.zip.ZipException?400:cause instanceof IllegalStateException||cause instanceof UnsupportedOperationException?503:500;
             String message=code==500?"Internal MCC error; see server logs":Objects.toString(cause.getMessage(),"Request failed");
             if(code==500)plugin.getLogger().warning("MCC request failed: "+cause.getClass().getSimpleName());respond(e,code,Map.of("error","request_failed","message",message));
         }
@@ -108,23 +111,26 @@ public final class WebServer implements AutoCloseable {
             case "/api/integrations" -> {admin(s);active(s);yield plugin.integrations().discover(s).get(15,TimeUnit.SECONDS);}
             case "/api/punishments/provider" -> {moderator(s);active(s);yield Map.of("provider",plugin.integrations().punishmentProvider().get(15,TimeUnit.SECONDS));}
             case "/api/ore-monitor" -> {admin(s);active(s);yield plugin.oreMonitor().snapshot();}
+            case "/api/ore-monitor/history" -> {admin(s);active(s);yield plugin.oreMonitor().history(query(e,"query",""),Integer.parseInt(query(e,"offset","0")),Integer.parseInt(query(e,"limit","50"))).get(15,TimeUnit.SECONDS);}
             case "/api/players" -> main.await(game::players);
             case "/api/worlds" -> {List<Map<String,Object>> worlds=main.await(game::worlds);if(!Set.of("Owner","Admin").contains(s.role())){List<Map<String,Object>> filtered=new ArrayList<>();for(Map<String,Object> w:worlds){Map<String,Object> c=new LinkedHashMap<>(w);c.remove("seed");filtered.add(c);}yield filtered;}yield worlds;}
             case "/api/catalogs" -> main.await(game::catalogs);
             case "/api/map/images" -> {mapEnabled();active(s);yield game.mapImages(query(e,"world",""));}
-            case "/api/map/players" -> {mapEnabled();active(s);yield main.await(()->{active(s);return game.mapPlayers(query(e,"world",""));});}
+            case "/api/map/players" -> {mapEnabled();ModulePolicy.require("playerSnapshots",plugin::module);active(s);yield main.await(()->{active(s);ModulePolicy.require("playerSnapshots",plugin::module);return game.mapPlayers(query(e,"world",""));});}
             case "/api/punishments" -> {moderator(s);String uuid=query(e,"uuid","");yield plugin.punishments().list(uuid.isBlank()?null:dev.mcc.game.PunishmentEngine.uuid(uuid),Integer.parseInt(query(e,"limit","100"))).get();}
             case "/api/plugins" -> {admin(s);yield main.await(game::plugins);}
             case "/api/plugins/staged" -> {owner(s);yield plugin.pluginStage().list();}
             case "/api/plugins/catalog" -> {admin(s);active(s);if(!rate.allow(s.name()+":plugin-catalog",30,60000))throw new TooMany();yield plugin.pluginCatalog().search(query(e,"query",""),query(e,"sort","downloads"),Integer.parseInt(query(e,"offset","0")),Integer.parseInt(query(e,"limit","20")),Boolean.parseBoolean(query(e,"compatible","true")),Boolean.parseBoolean(query(e,"featured","false"))).get(18,TimeUnit.SECONDS);}
             case "/api/plugins/catalog/plan" -> {owner(s);active(s);if(!rate.allow(s.name()+":plugin-plan",12,60000))throw new TooMany();yield plugin.pluginCatalog().plan(query(e,"projectId",""),s.name()).get(18,TimeUnit.SECONDS);}
             case "/api/plugins/catalog/installed" -> {admin(s);active(s);yield plugin.pluginCatalog().installedCatalog().get(10,TimeUnit.SECONDS);}
-            case "/api/events" -> main.await(game::activeEvents);
+            case "/api/events" -> main.await(game::gameEvents);
+            case "/api/events/catalog" -> main.await(game::eventCatalog);
             case "/api/entities" -> {if(!rate.allow(s.name()+":entities",30,60000))throw new TooMany();Map<String,Object> params=new LinkedHashMap<>();params.put("world",query(e,"world",""));for(String coordinate:List.of("x","y","z"))params.put(coordinate,Double.parseDouble(query(e,coordinate,"0")));params.put("radius",Double.parseDouble(query(e,"radius","16")));yield main.await(()->game.entities(params));}
             case "/api/audit" -> {moderator(s);yield db.auditHistory().get();}
             case "/api/metrics" -> {String range=query(e,"range","5m");long duration=switch(range){case "5m"->300000;case "1h"->3600000;case "24h"->86400000;default->throw new IllegalArgumentException("Unknown metric range");};yield db.metrics(System.currentTimeMillis()-duration).get();}
             case "/api/automations" -> {admin(s);yield plugin.automation().list();}
             case "/api/automations/catalog" -> {admin(s);yield plugin.automation().catalog();}
+            case "/api/automations/profiles" -> {admin(s);active(s);yield plugin.automation().profiles();}
             case "/api/backups" -> {owner(s);yield plugin.backup().list();}
             case "/api/settings" -> plugin.settings();
             case "/api/users" -> {owner(s);yield db.users().get();}
@@ -144,11 +150,12 @@ public final class WebServer implements AutoCloseable {
             case "/api/server/profiles/plan" -> {owner(s);active(s);yield plugin.kernelProfiles().plan(profileActor(s),Json.text(body,"profile",""),()->auth.session(s.id())==s&&s.role().equals("Owner")).get(15,TimeUnit.SECONDS);}
             case "/api/server/profiles/apply" -> {owner(s);active(s);yield tracked("server.profiles.apply",body,s,()->plugin.kernelProfiles().apply(profileActor(s),Json.text(body,"planId",""),Boolean.TRUE.equals(body.get("confirmed")),()->auth.session(s.id())==s&&s.role().equals("Owner")).thenApply(v->v));}
             case "/api/punishments" -> {moderator(s);builtinModeration();Map<String,Object> values=punishmentBody(body);if(Set.of("ban","kick").contains(Json.text(values,"type","").toLowerCase(Locale.ROOT))&&!Boolean.TRUE.equals(body.get("confirmed")))throw new IllegalArgumentException("Explicit confirmation required");yield tracked("punishment.create",body,s,()->plugin.punishments().create(values,s.name()).thenApply(value->value));}
+            case "/api/automations/profiles" -> {admin(s);active(s);Map<String,Object> saved=plugin.automation().saveProfile(body,s.name(),s.role());db.audit(s.name(),"automation.profile.save","ok",Map.of("id",saved.get("id")));yield saved;}
             case "/api/automations" -> {admin(s);active(s);Map<String,Object> saved=plugin.automation().save(body,s.name(),s.role());db.audit(s.name(),"automation.save","ok",Map.of("id",saved.get("id")));yield saved;}
             case "/api/backups" -> {owner(s);if(plugin.backup().list().size()>=20)throw new IllegalStateException("Backup limit reached; archive old backups offline");Object backup=plugin.backup().create();db.audit(s.name(),"backup.create","ok",Map.of("scope","MCC data"));yield backup;}
             case "/api/settings" -> {admin(s);Object result=plugin.updateSettings(body);db.audit(s.name(),"settings.update","ok",Map.of());yield result;}
             case "/api/users" -> {owner(s);String name=Json.text(body,"username","");auth.createUser(s,name,Json.text(body,"password",""),Json.text(body,"role","Viewer"));db.audit(s.name(),"users.create","ok",Map.of("username",name,"role",Json.text(body,"role","Viewer")));yield Map.of("ok",true);}
-            case "/api/plugins/catalog/install" -> {owner(s);active(s);if(!Boolean.TRUE.equals(body.get("confirmed")))throw new IllegalArgumentException("Explicit confirmation required");yield tracked("plugins.catalog.install",body,s,()->{active(s);if(!rate.allow(s.name()+":plugin-install",5,60000))throw new TooMany();return plugin.pluginCatalog().install(Json.text(body,"planId",""),s.name(),()->auth.session(s.id())==s&&s.role().equals("Owner")).thenApply(value->value);});}
+            case "/api/plugins/catalog/install" -> {owner(s);active(s);if(!Boolean.TRUE.equals(body.get("confirmed")))throw new IllegalArgumentException("Explicit confirmation required");yield tracked("plugins.catalog.install",body,s,()->{active(s);if(!rate.allow(s.name()+":plugin-install",5,60000))throw new TooMany();return plugin.pluginCatalog().install(Json.text(body,"planId",""),s.name(),()->plugin.module("catalog")&&auth.session(s.id())==s&&s.role().equals("Owner")).thenApply(value->value);});}
             default -> {
                 if(path.startsWith("/api/integrations/")){String[] parts=path.substring("/api/integrations/".length()).split("/",-1);if(parts.length!=2||!Set.of("luckperms","coreprotect","advancedban","grim").contains(parts[0]))throw new IllegalArgumentException("Unknown integration route");admin(s);active(s);if(parts[1].equals("query"))yield tracked("integration."+parts[0]+".query",body,s,()->plugin.integrations().query(s,parts[0],body).thenApply(v->v));if(parts[1].equals("mutate")){owner(s);yield tracked("integration."+parts[0]+".mutate",body,s,()->plugin.integrations().mutate(s,parts[0],body).thenApply(v->v));}throw new IllegalArgumentException("Unknown integration operation");}
                 if(path.startsWith("/api/automations/")&&path.endsWith("/run")){
@@ -168,7 +175,7 @@ public final class WebServer implements AutoCloseable {
         Object raw=body.getOrDefault("params",Map.of());if(!(raw instanceof Map<?,?>))throw new IllegalArgumentException("Invalid parameters");Map<String,Object> params=(Map<String,Object>)raw;
         if(CONFIRMED.contains(action)&&!Boolean.TRUE.equals(body.get("confirmed")))throw new IllegalArgumentException("Explicit confirmation required");
         if(action.equals("mob.spawn")&&Set.of("WITHER","ENDER_DRAGON").contains(String.valueOf(params.get("type")).toUpperCase(Locale.ROOT))&&!Boolean.TRUE.equals(body.get("confirmed")))throw new IllegalArgumentException("Destructive mob type requires explicit confirmation");
-        if(action.startsWith("event.")&&!plugin.module("events")&&!action.equals("event.stop"))throw new IllegalStateException("Game events module is disabled");
+        ModulePolicy.require(ModulePolicy.actionModule(action),plugin::module);
         if(action.startsWith("chat.")&&!plugin.module("chat"))throw new IllegalStateException("Chat module is disabled");
         if(!rate.allow(s.name()+":action",120,60000))throw new TooMany();
         long now=System.currentTimeMillis();requests.entrySet().removeIf(e->now-e.getValue().created()>600000&&e.getValue().result().isDone());if(requests.size()>=1024)throw new IllegalStateException("Action deduplication queue full");
@@ -180,7 +187,7 @@ public final class WebServer implements AutoCloseable {
                 moderation(action,params,s).whenComplete((actual,error)->{if(error!=null)fresh.result().completeExceptionally(error);else db.audit(s.name(),action,"ok",redact(params)).whenComplete((unused,auditError)->{if(auditError!=null)fresh.result().completeExceptionally(new IllegalStateException("Punishment applied; audit is unavailable"));else fresh.result().complete(Map.of("ok",true,"result",actual,"sequence",realtime.sequence()));plugin.refreshSoon();});});
                 try{return fresh.result().get(8,TimeUnit.SECONDS);}catch(TimeoutException timeout){return pending(id);}
             }
-            Object actual=main.await(()->{active(s);return game.execute(action,params);});Map<String,Object> response=Map.of("ok",true,"result",actual,"sequence",realtime.sequence());
+            Object actual=main.await(()->{active(s);ModulePolicy.require(ModulePolicy.actionModule(action),plugin::module);return game.execute(action,params);});Map<String,Object> response=Map.of("ok",true,"result",actual,"sequence",realtime.sequence());
             db.audit(s.name(),action,"ok",redact(params)).get();realtime.publish("timeline",Map.of("time",now,"actor",s.name(),"action",action,"status","ok"));plugin.refreshSoon();fresh.result().complete(response);return response;
         }catch(MainThread.PendingOperation pending){pending.future().whenComplete((actual,error)->{
             if(error!=null){db.audit(s.name(),action,"error",Map.of("message","Action failed"));fresh.result().completeExceptionally(error);}

@@ -17,6 +17,14 @@ modules:
   events: true
   automations: true
   map: true
+  oreMonitor: true
+  integrations: true
+  metrics: true
+  playerSnapshots: true
+  entitySnapshots: true
+  timeline: true
+  catalog: true
+  console: true
 game:
   max-spawn-count: 128
   max-active-events: 3

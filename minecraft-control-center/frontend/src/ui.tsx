@@ -9,6 +9,12 @@ import {CatalogPicker,CatalogInput} from './Catalog';
 
 export function Icon({name, size = 20}: {name: string; size?: number}) {
   const paths: Record<string, ReactNode> = {
+    users: <><circle cx="8" cy="7" r="3"/><path d="M2 21v-4a6 6 0 0 1 12 0v4M17 4a3 3 0 0 1 0 6m4 11v-4a6 6 0 0 0-3-5"/></>,
+    user: <><circle cx="12" cy="7" r="4"/><path d="M4 22v-3a8 8 0 0 1 16 0v3"/></>,
+    'arrow-right': <path d="M4 12h16m-6-6 6 6-6 6"/>,
+    plus: <path d="M12 4v16M4 12h16"/>,
+    shield: <><path d="m12 2 9 4v6c0 5-4 8-9 10-5-2-9-5-9-10V6l9-4Z"/><path d="m8 12 3 3 5-6"/></>,
+    trash: <><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></>,
     dashboard: <><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></>,
     players: <><circle cx="9" cy="7" r="3"/><path d="M2 21v-4a7 7 0 0 1 14 0v4M16 4a3 3 0 0 1 0 6m3 11v-4a7 7 0 0 0-2-5"/></>,
     worlds: <><path d="m12 2 10 5v10l-10 5L2 17V7l10-5Zm0 10 10-5M12 12 2 7m10 5v10"/></>,

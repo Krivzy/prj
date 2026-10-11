@@ -2,7 +2,7 @@ export type GraphKind='trigger'|'condition'|'action'|'delay';
 export type GraphConfig=Record<string,unknown>;
 export type GraphNodeSpec={id:string;type:GraphKind;config:GraphConfig;pos:{x:number;y:number}};
 export type GraphEdgeSpec={id:string;source:string;target:string;sourceHandle:'next'|'true'|'false'};
-export type GraphRule={id:string;name:string;enabled:boolean;world:string;cooldownSeconds:number;graphVersion:1;nodes:GraphNodeSpec[];edges:GraphEdgeSpec[]};
+export type GraphRule={id:string;profileId?:string;name:string;enabled:boolean;world:string;cooldownSeconds:number;graphVersion:1;nodes:GraphNodeSpec[];edges:GraphEdgeSpec[]};
 
 export function graphChangesAffectDocument(changes:{type:string;id?:string;position?:{x:number;y:number}}[],nodes:GraphNodeSpec[]):boolean{
  return changes.some(change=>change.type==='add'||change.type==='replace'||change.type==='remove'||change.type==='position'&&change.position&&nodes.some(node=>node.id===change.id&&(node.pos.x!==change.position!.x||node.pos.y!==change.position!.y)));

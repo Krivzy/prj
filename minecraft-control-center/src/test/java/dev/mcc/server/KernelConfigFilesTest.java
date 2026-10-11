@@ -32,4 +32,13 @@ class KernelConfigFilesTest {
     @Test void supportedPurpurSchemaOnlyChangesAllowlistedKeys()throws Exception {
         byte[] output=KernelConfigFiles.merge(KernelConfigFiles.Kind.PURPUR,bytes("config-version: 49\nsettings:\n  tps-catchup: true\n  unrelated: retained\nworld-settings:\n  default:\n    pig:\n      ridable: true\n"),List.of(edit(false,"settings","tps-catchup"))).bytes();Map<String,Object> parsed=KernelConfigFiles.readYaml(KernelConfigFiles.Kind.PURPUR,output);assertEquals(false,((Map<?,?>)parsed.get("settings")).get("tps-catchup"));assertNotNull(parsed.get("world-settings"));
     }
+    @Test void paperCollisionSettingHasExactTypedPathAndConservativeBounds()throws Exception {
+        byte[] before=bytes("_version: 31\ncollisions:\n  max-entity-collisions: 8\n  unrelated: retained\n");
+        byte[] maximum=KernelConfigFiles.merge(KernelConfigFiles.Kind.PAPER,before,List.of(edit(2,"collisions","max-entity-collisions"))).bytes();
+        Map<?,?> values=(Map<?,?>)KernelConfigFiles.readYaml(KernelConfigFiles.Kind.PAPER,maximum).get("collisions");assertEquals(2,values.get("max-entity-collisions"));assertEquals("retained",values.get("unrelated"));
+        byte[] restored=KernelConfigFiles.merge(KernelConfigFiles.Kind.PAPER,maximum,List.of(edit(8,"collisions","max-entity-collisions"))).bytes();assertEquals(8,((Map<?,?>)KernelConfigFiles.readYaml(KernelConfigFiles.Kind.PAPER,restored).get("collisions")).get("max-entity-collisions"));
+        for(Object invalid:List.of(0,9,true,"2"))assertThrows(IllegalArgumentException.class,()->edit(invalid,"collisions","max-entity-collisions"));
+        assertThrows(java.io.IOException.class,()->KernelConfigFiles.merge(KernelConfigFiles.Kind.PAPER,before,List.of(edit(2,"misc","max-entity-collisions"))));
+        assertThrows(java.io.IOException.class,()->KernelConfigFiles.merge(KernelConfigFiles.Kind.PAPER,bytes("_version: 31\ncollisions:\n  max-entity-collisions: '8'\n"),List.of(edit(2,"collisions","max-entity-collisions"))));
+    }
 }
