@@ -1,0 +1,23 @@
+import {useState} from 'react';
+import type {FormEvent} from 'react';
+import {post,request} from './api';
+import {useApp,useResource} from './context';
+import {Avatar,Button,Empty,ErrorBox,Field,Icon,Loading,Modal,Panel} from './ui';
+import './PanelUsers.css';
+
+type User={name:string;role:string};
+export default function PanelUsers(){
+  const app=useApp();const users=useResource<User[]>('/api/users');
+  const [adding,setAdding]=useState(false),[name,setName]=useState(''),[password,setPassword]=useState(''),[role,setRole]=useState('Viewer'),[busy,setBusy]=useState(false),[removing,setRemoving]=useState<User|null>(null);
+  const roleName=(r:string)=>r==='Owner'?app.t('Администратор панели','Panel administrator'):r==='Admin'?app.t('Администратор сервера','Server administrator'):r==='Moderator'?app.t('Модератор','Moderator'):app.t('Наблюдатель','Viewer');
+  async function create(e:FormEvent){e.preventDefault();setBusy(true);try{await post('/api/users',{username:name,password,role});setPassword('');setName('');setAdding(false);users.reload();app.notify(app.t('Пользователь создан','User created'));}catch(error){app.notify(error instanceof Error?error.message:String(error),true);}finally{setBusy(false);}}
+  async function remove(){if(!removing)return;setBusy(true);try{await request(`/api/users/${encodeURIComponent(removing.name)}`,{method:'DELETE'});setRemoving(null);users.reload();app.notify(app.t('Пользователь удалён. Его сессии завершены.','User deleted. Their sessions have ended.'));}catch(error){app.notify(error instanceof Error?error.message:String(error),true);users.reload();}finally{setBusy(false);}}
+  const owners=users.data?.filter(u=>u.role==='Owner').length??0;
+  return <Panel className="users-panel"><div className="panel-heading"><h2>{app.t('Пользователи панели','Dashboard users')}</h2><Button onClick={()=>setAdding(true)} className="primary">{app.t('Добавить пользователя','Add user')}</Button></div>
+    {users.error?<ErrorBox error={users.error} retry={users.reload}/>:users.loading&&!users.data?<Loading/>:null}
+    <div className="panel-users-list">{users.data?.map(user=>{const self=user.name===app.auth.user?.name;const protectedUser=self||user.role==='Owner'&&owners<=1;return <div className="panel-user-row" key={user.name}><Avatar name={user.name} small/><div className="panel-user-name"><strong>{user.name}</strong><small>{roleName(user.role)}{self&&` · ${app.t('Вы','You')}`}</small></div><Button className="panel-user-delete" disabled={protectedUser||busy} title={protectedUser?app.t('Текущую учётную запись и последнего администратора удалить нельзя','The current account and last administrator cannot be deleted'):undefined} aria-label={app.t(`Удалить пользователя ${user.name}`,`Delete user ${user.name}`)} onClick={()=>setRemoving(user)}><Icon name="close" size={16}/><span>{app.t('Удалить','Delete')}</span></Button></div>;})}</div>
+    {users.data?.length===0&&<Empty title={app.t('Пользователей нет','No users')}/>}
+    {adding&&<Modal title={app.t('Новый пользователь панели','New dashboard user')} close={()=>{if(!busy){setAdding(false);setPassword('');}}}><form className="modal-body stack" onSubmit={create}><Field label={app.t('Логин','Username')}><input required minLength={3} maxLength={32} autoComplete="off" value={name} onChange={e=>setName(e.target.value)}/></Field><Field label={app.t('Пароль: минимум 12 символов','Password: at least 12 characters')}><input type="password" required minLength={12} maxLength={128} autoComplete="new-password" value={password} onChange={e=>setPassword(e.target.value)}/></Field><Field label={app.t('Роль','Role')}><select value={role} onChange={e=>setRole(e.target.value)}>{['Viewer','Moderator','Admin','Owner'].map(r=><option value={r} key={r}>{roleName(r)}</option>)}</select></Field><Button type="submit" className="primary" disabled={busy}>{busy&&<span className="spinner"/>}{app.t('Создать пользователя','Create user')}</Button></form></Modal>}
+    {removing&&<Modal title={app.t('Удалить пользователя?','Delete user?')} close={()=>{if(!busy)setRemoving(null);}} danger><div className="modal-body stack"><p>{app.t(`Учётная запись ${removing.name} будет удалена, все её сессии завершатся. Записи журнала останутся.`,`The account ${removing.name} will be deleted and all its sessions will end. Audit records remain.`)}</p><div className="button-row"><Button disabled={busy} onClick={()=>setRemoving(null)}>{app.t('Отмена','Cancel')}</Button><Button disabled={busy} className="danger" onClick={()=>void remove()}>{busy&&<span className="spinner"/>}{app.t('Удалить пользователя','Delete user')}</Button></div></div></Modal>}
+  </Panel>;
+}

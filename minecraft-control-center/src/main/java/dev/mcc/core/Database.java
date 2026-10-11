@@ -56,12 +56,17 @@ public final class Database implements AutoCloseable {
     public CompletableFuture<Boolean> bootstrapAdmin(String hash) {
         return submit(c->{c.setAutoCommit(false);try {
             try(PreparedStatement s=c.prepareStatement("SELECT 1 FROM documents WHERE namespace='migrations' AND id='auth-bootstrap-admin-v1'");ResultSet r=s.executeQuery()){if(r.next()){c.commit();return false;}}
-            boolean created;try(PreparedStatement s=c.prepareStatement("INSERT OR IGNORE INTO users(name,hash,role) VALUES('admin',?,'Owner')")){s.setString(1,hash);created=s.executeUpdate()==1;}
+            boolean empty;try(Statement s=c.createStatement();ResultSet r=s.executeQuery("SELECT count(*) FROM users")){r.next();empty=r.getInt(1)==0;}
+            boolean created=false;if(empty){try(PreparedStatement s=c.prepareStatement("INSERT INTO users(name,hash,role) VALUES('admin',?,'Owner')")){s.setString(1,hash);created=s.executeUpdate()==1;}}
+            if(created){try(PreparedStatement s=c.prepareStatement("INSERT INTO documents VALUES('auth-default-account','admin',?)")){s.setString(1,Json.write(Map.of("name","admin")));s.executeUpdate();}}
             try(PreparedStatement s=c.prepareStatement("INSERT INTO documents(namespace,id,json) VALUES('migrations','auth-bootstrap-admin-v1',?)")){s.setString(1,Json.write(Map.of("completedAt",System.currentTimeMillis(),"created",created)));s.executeUpdate();}
             c.commit();return created;
         }catch(Exception e){c.rollback();throw e;}finally{c.setAutoCommit(true);}});
     }
     public CompletableFuture<Boolean> changeUser(String oldName,String expectedHash,String newName,String newHash) {
+        return changeUser(oldName,expectedHash,newName,newHash,false);
+    }
+    public CompletableFuture<Boolean> changeUser(String oldName,String expectedHash,String newName,String newHash,boolean clearDefaultPassword) {
         return submit(c->{c.setAutoCommit(false);try {
             boolean changed;try(PreparedStatement s=c.prepareStatement("UPDATE users SET name=?,hash=? WHERE name=? AND hash=?")){s.setString(1,newName);s.setString(2,newHash);s.setString(3,oldName);s.setString(4,expectedHash);changed=s.executeUpdate()==1;}
             if(changed&&!oldName.equals(newName)){
@@ -71,6 +76,9 @@ public final class Database implements AutoCloseable {
                 try(PreparedStatement s=c.prepareStatement("DELETE FROM documents WHERE namespace='build-history' AND id IN (?,?)")){s.setString(1,oldName);s.setString(2,newName);s.executeUpdate();}
                 if(source!=null){Map<String,Object> history=new LinkedHashMap<>(Json.object(source));history.put("actor",newName);try(PreparedStatement s=c.prepareStatement("INSERT INTO documents(namespace,id,json) VALUES('build-history',?,?)")){s.setString(1,newName);s.setString(2,Json.write(history));s.executeUpdate();}}
             }
+            if(changed){boolean defaultAccount;try(PreparedStatement s=c.prepareStatement("SELECT 1 FROM documents WHERE namespace='auth-default-account' AND id=?")){s.setString(1,oldName);try(ResultSet r=s.executeQuery()){defaultAccount=r.next();}}
+                if(defaultAccount){try(PreparedStatement s=c.prepareStatement("DELETE FROM documents WHERE namespace='auth-default-account' AND id=?")){s.setString(1,oldName);s.executeUpdate();}
+                    if(!clearDefaultPassword){try(PreparedStatement s=c.prepareStatement("INSERT INTO documents VALUES('auth-default-account',?,?)")){s.setString(1,newName);s.setString(2,Json.write(Map.of("name",newName)));s.executeUpdate();}}}}
             c.commit();return changed;
         }catch(Exception e){c.rollback();throw e;}finally{c.setAutoCommit(true);}});
     }
@@ -109,6 +117,16 @@ public final class Database implements AutoCloseable {
         } catch(Exception e){c.rollback();throw e;}finally{c.setAutoCommit(true);}});
     }
     public CompletableFuture<List<Map<String,Object>>> users() {return submit(c->{List<Map<String,Object>> out=new ArrayList<>();try(Statement s=c.createStatement();ResultSet r=s.executeQuery("SELECT name,role FROM users ORDER BY name")){while(r.next())out.add(Map.of("name",r.getString(1),"role",r.getString(2)));}return out;});}
+    public CompletableFuture<Boolean> deleteUser(String name) {
+        return submit(c->{c.setAutoCommit(false);try{
+            String role=null;try(PreparedStatement s=c.prepareStatement("SELECT role FROM users WHERE name=?")){s.setString(1,name);try(ResultSet r=s.executeQuery()){if(r.next())role=r.getString(1);}}
+            if(role==null){c.commit();return false;}
+            if(role.equals("Owner")){try(Statement s=c.createStatement();ResultSet r=s.executeQuery("SELECT count(*) FROM users WHERE role='Owner'")){r.next();if(r.getInt(1)<=1)throw new IllegalArgumentException("The last full administrator cannot be deleted");}}
+            try(PreparedStatement s=c.prepareStatement("DELETE FROM users WHERE name=?")){s.setString(1,name);s.executeUpdate();}
+            try(PreparedStatement s=c.prepareStatement("DELETE FROM documents WHERE namespace='auth-default-account' AND id=?")){s.setString(1,name);s.executeUpdate();}
+            c.commit();return true;
+        }catch(Exception error){c.rollback();throw error;}finally{c.setAutoCommit(true);}});
+    }
     public CompletableFuture<Void> audit(String actor,String action,String status,Object details) {
         return submit(c->{try(PreparedStatement s=c.prepareStatement("INSERT INTO audit(time,actor,action,status,details) VALUES(?,?,?,?,?)")){
             s.setLong(1,System.currentTimeMillis());s.setString(2,actor);s.setString(3,action);s.setString(4,status);s.setString(5,Json.write(details));s.executeUpdate();}return null;});

@@ -1,5 +1,3 @@
-> Исторический API версии0.3. В0.5 BuildEngine, строительство и объёмные detail/region API удалены; прежние authenticated маршруты отвечают `410 feature_removed`. Действующая карта: [ISOMETRIC-MAP.md](ISOMETRIC-MAP.md). Ниже сохранены прежние контракты и проверки; выполнять их на0.5 нельзя.
-
 # Архив: прежняя 3D карта и строительство
 
 В MCC0.5 карта доступна только для просмотра на Canvas2D. Весь namespace `/api/build` и бывшие `/api/map/detail`, `/api/map/region` retired: authenticated410/anonymous401; BuildEngine удалён. Текущий surface/index контракт и лимиты описаны в [API.md](../API.md). Ниже сохранена историческая документация ранней карты; она не описывает доступные сейчас endpoints.

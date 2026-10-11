@@ -1,3 +1,9 @@
+# MCC0.6 — постоянная карта изображений
+
+Действующая архитектура, API, ограничения и проверки: [PERSISTENT-IMAGE-MAP.md](PERSISTENT-IMAGE-MAP.md). В0.6 viewport sampler и Canvas terrain runtime заменены постоянными PNG-тайлами и чтением Anvil вне Bukkit.
+
+## Архив архитектуры0.5
+
 # MCC0.5 — fixed isometric world map
 
 The world map is a read-only Canvas2D surface, using a fixed isometric projection. Dragging pans; the wheel, buttons and keyboard change scale or position. There is no orbit control, construction tool, preview, clipboard, undo or redo. Spawn/player buttons and the X/Z form provide keyboard and single-pointer navigation.

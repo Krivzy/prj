@@ -1,168 +1,163 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {request} from './api';
-import {formatNumber, useApp, useResource} from './context';
+import {formatNumber, useApp} from './context';
 import {useLive} from './live';
-import {GameImage, assetName, useAssets} from './assets';
+import {GameImage} from './assets';
 import {Button, ErrorBox, Icon} from './ui';
-import {IsometricMap} from './isometric-map';
-import {INITIAL_ZOOM, mergeSurfaceTiles, project, unproject, viewportFor} from './map-surface';
-import type {Point, SurfaceCell, SurfaceTile, Terrain, WorldIndex} from './map-surface';
-import './IsometricMap.css';
+import {fitImage, panImage, projectImage, sameMarkers, screenPoint, unprojectImage, visibleImages, zoomImage} from './saved-image-map';
+import type {Camera, ImageManifest, Marker, PlayerMarkers, Position, Size} from './saved-image-map';
+import './SavedImageMap.css';
 
-const coordinates = (p: Point) => [p.x, p.y, p.z].map(Math.floor).join(', ');
 const detail = (error: unknown) => error instanceof Error ? error.message : String(error);
-type Viewport = ReturnType<typeof viewportFor>;
+const coordinates = (p: Position) => [p.x, p.y, p.z].map(Math.floor).join(', ');
 
-function WorldOverview({index, cx, cz, jump, t}: {index: WorldIndex | null; cx: number; cz: number; jump: (x: number, z: number) => void; t: (ru: string, en: string) => string}) {
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const base = useMemo(() => {
-    if (!index?.bounds) return null;
-    const {minX, maxX, minZ, maxZ} = index.bounds;
-    const origin = {x: (minX + maxX + 1) / 2, y: 0, z: (minZ + maxZ + 1) / 2};
-    const scale = Math.min(264 / ((maxX - minX + maxZ - minZ + 2) * 8), 140 / ((maxX - minX + maxZ - minZ + 2) * 4));
-    const image = document.createElement('canvas'); image.width = 288; image.height = 164;
-    const ctx = image.getContext('2d')!; ctx.fillStyle = '#81e9a1';
-    const pixels = new Set<number>();
-    for (const region of index.regions) {
-      const bits = atob(region.presence);
-      for (let i = 0; i < 1024; i++) {
-        if (!(bits.charCodeAt(i >> 3) & (1 << (i & 7)))) continue;
-        const p = project({x: region.rx * 32 + i % 32 + .5, y: 0, z: region.rz * 32 + Math.floor(i / 32) + .5}, origin);
-        const x = Math.floor(144 + p.x * scale), y = Math.floor(82 + p.y * scale), key = x + y * 288;
-        if (x < 0 || x >= 288 || y < 0 || y >= 164 || pixels.has(key)) continue;
-        pixels.add(key); ctx.fillRect(x, y, Math.max(1, 8 * scale), Math.max(1, 4 * scale));
-      }
-    }
-    return {image, origin, scale};
-  }, [index]);
+/** Native image decoding and HTTP cache only. This API never starts a terrain render. */
+function CachedTile({world, level, x, y, revision, style}: {world: string; level: number; x: number; y: number; revision: number; style: React.CSSProperties}) {
+  const [source, setSource] = useState(''), currentUrl = useRef('');
   useEffect(() => {
-    const ctx = canvas.current?.getContext('2d'); if (!ctx) return;
-    ctx.fillStyle = '#111c19'; ctx.fillRect(0, 0, 288, 164);
-    if (!base) return;
-    ctx.globalAlpha = .55; ctx.drawImage(base.image, 0, 0); ctx.globalAlpha = 1;
-    const p = project({x: cx + .5, y: 0, z: cz + .5}, base.origin);
-    ctx.strokeStyle = '#f2d88b'; ctx.lineWidth = 2; ctx.strokeRect(144 + p.x * base.scale - 4, 82 + p.y * base.scale - 4, 8, 8);
-  }, [base, cx, cz]);
-  return <section className="iso-map-panel"><div className="iso-map-panel-heading"><h3>{t('Сохранённые области', 'Saved areas')}</h3><span>{formatNumber(index?.savedChunks)} {t('чанков', 'chunks')}</span></div>
-    <canvas ref={canvas} width={288} height={164} aria-label={t('Сохранённые области мира. Для точного перехода используйте координаты.', 'Saved world areas. Use coordinates for precise navigation.')} onClick={e => {
-      if (!base) return;
-      const rect = e.currentTarget.getBoundingClientRect();
-      const p = unproject({x: ((e.clientX - rect.left) * 288 / rect.width - 144) / base.scale, y: ((e.clientY - rect.top) * 164 / rect.height - 82) / base.scale}, base.origin);
-      jump(Math.floor(p.x) * 16, Math.floor(p.z) * 16);
-    }}/><p>{index?.truncated ? t('Обзор ограничен 2048 файлами регионов.', 'Overview is limited to 2048 region files.') : t('Выберите область или введите координаты.', 'Choose an area or enter coordinates.')}</p>
-  </section>;
+    let active = true;
+    const controller = new AbortController(), timer = window.setTimeout(() => controller.abort(), 20000);
+    const query = new URLSearchParams({world, level: String(level), x: String(x), y: String(y)});
+    // Stable URLs let the browser reuse ETag/304 across manifest revisions.
+    fetch('/api/map/images/tile?' + query, {credentials: 'same-origin', cache: 'no-cache', signal: controller.signal}).then(async response => {
+      if (response.status === 401) window.dispatchEvent(new Event('mcc-session-expired'));
+      if (!response.ok || !response.headers.get('Content-Type')?.startsWith('image/png')) return;
+      const blob = await response.blob();
+      if (!active || blob.size > 1048576) return;
+      const next = URL.createObjectURL(blob), previous = currentUrl.current;
+      currentUrl.current = next; setSource(next); if (previous) URL.revokeObjectURL(previous);
+    }).catch(() => {/* Missing images remain transparent until a later background revision. */}).finally(() => clearTimeout(timer));
+    return () => {active = false; clearTimeout(timer); controller.abort();};
+  }, [world, level, x, y, revision]);
+  useEffect(() => () => {if (currentUrl.current) URL.revokeObjectURL(currentUrl.current);}, []);
+  return source ? <img className="image-map-tile" src={source} alt="" draggable={false} decoding="async" style={style}/> : null;
 }
 
 export default function MapPage() {
-  const {t, lang} = useApp(), live = useLive(), assets = useAssets();
+  const {t} = useApp(), live = useLive();
   const worlds = live.snapshot?.worlds ?? [], [worldName, setWorldName] = useState('');
   const world = worlds.find(w => w.name === worldName) ?? worlds[0];
-  const canvas = useRef<HTMLCanvasElement>(null), view = useRef<IsometricMap | null>(null);
-  const [center, setCenter] = useState<Point>({x: 0, y: 64, z: 0}), [zoom, setZoom] = useState(INITIAL_ZOOM);
-  const [viewport, setViewport] = useState<Viewport>({cx: 0, cz: 0, radius: 2, step: 1});
-  const [cache, setCache] = useState<{world: string; tiles: SurfaceTile[]}>({world: '', tiles: []});
-  const [loading, setLoading] = useState(true), [pending, setPending] = useState(false), [error, setError] = useState('');
-  const [revision, setRevision] = useState(0), [hover, setHover] = useState<SurfaceCell | null>(null), [selected, setSelected] = useState<SurfaceCell | null>(null);
-  const [draft, setDraft] = useState({x: '0', z: '0'});
-  const index = useResource<WorldIndex>(world ? '/api/map/index?world=' + encodeURIComponent(world.name) : null);
-  const lastWorld = useRef('');
+  const name = world?.name ?? '', worldId = world?.uuid ?? '';
+  const stage = useRef<HTMLDivElement>(null), [size, setSize] = useState<Size>({width: 800, height: 560});
+  const [camera, setCamera] = useState<Camera>({u: 0, v: -64, scale: 2}), cameraRef = useRef(camera); cameraRef.current = camera;
+  const drag = useRef<{id: number; x: number; y: number; camera: Camera} | null>(null);
+  const fitting = useRef({world: '', touched: false, fitted: false, width: 0, height: 0});
+  const [manifest, setManifest] = useState<ImageManifest | null>(null), [players, setPlayers] = useState<Marker[]>([]);
+  const [loading, setLoading] = useState(true), [error, setError] = useState(''), [playerError, setPlayerError] = useState('');
+  const [reload, setReload] = useState(0), [draft, setDraft] = useState({x: '0', z: '0'});
+  const data = manifest?.worldId === worldId ? manifest : null;
+  const release = useCallback(() => {
+    const previous = drag.current; drag.current = null;
+    if (previous && stage.current?.hasPointerCapture(previous.id)) stage.current.releasePointerCapture(previous.id);
+    stage.current?.classList.remove('is-dragging');
+  }, []);
 
   useEffect(() => {
-    if (!canvas.current) return;
-    const instance = new IsometricMap(canvas.current, {
-      onView: (point, scale, next) => {
-        setCenter(point); setZoom(scale);
-        setViewport(previous => previous.cx === next.cx && previous.cz === next.cz && previous.radius === next.radius ? previous : next);
-      }, onHover: setHover, onSelect: setSelected
-    });
-    view.current = instance;
-    return () => {instance.dispose(); view.current = null; lastWorld.current = '';};
+    const element = stage.current; if (!element) return;
+    const observer = new ResizeObserver(entries => {const {width, height} = entries[0].contentRect; setSize(previous => previous.width === width && previous.height === height ? previous : {width, height});});
+    observer.observe(element); return () => observer.disconnect();
   }, []);
   useEffect(() => {
-    if (!world || lastWorld.current === world.name) return;
-    lastWorld.current = world.name;
-    const point = {x: world.spawn.x, y: world.spawn.y, z: world.spawn.z};
-    view.current?.clear(world.name); view.current?.setCenter(point, true);
-    setCenter(point); setZoom(INITIAL_ZOOM); setDraft({x: String(Math.floor(point.x)), z: String(Math.floor(point.z))});
-    setSelected(null); setHover(null); setCache({world: world.name, tiles: []}); setError(''); setLoading(true);
-    const rect = canvas.current?.getBoundingClientRect();
-    setViewport(viewportFor(point, rect?.width ?? 800, rect?.height ?? 580, INITIAL_ZOOM));
-  }, [world]);
-  useEffect(() => {view.current?.setAssets(assets);}, [assets]);
+    release(); fitting.current = {world: worldId, touched: false, fitted: false, width: 0, height: 0};
+    setManifest(null); setPlayers([]); setError(''); setPlayerError(''); setLoading(true);
+    const spawn = world?.spawn ?? {x: 0, y: 64, z: 0};
+    setCamera({...projectImage(spawn), scale: 2}); setDraft({x: String(Math.floor(spawn.x)), z: String(Math.floor(spawn.z))});
+    return release;
+    // Live snapshot updates must not reset the camera or a held pointer.
+  }, [worldId, release]);
 
-  // Requests are scoped to the visible chunk window and stop when hidden.
   useEffect(() => {
-    if (!world) return;
-    const name = world.name, expected = viewportFor(center, canvas.current?.clientWidth ?? 800, canvas.current?.clientHeight ?? 580, zoom);
-    if (expected.cx !== viewport.cx || expected.cz !== viewport.cz) return;
-    setLoading(true); setPending(false); setError('');
-    let active = true, timer = 0, controller: AbortController | null = null, attempts = 0;
+    if (!name) return;
+    let active = true, timer = 0, controller: AbortController | null = null;
     const schedule = (ms: number) => {clearTimeout(timer); if (active && !document.hidden) timer = window.setTimeout(load, ms);};
     async function load() {
       if (!active || document.hidden) return;
-      controller?.abort(); controller = new AbortController();
-      const current = controller, deadline = window.setTimeout(() => current.abort(), 20000);
-      setLoading(true);
+      const current = new AbortController(); controller = current;
       try {
-        const query = new URLSearchParams({world: name, cx: String(viewport.cx), cz: String(viewport.cz), radius: String(viewport.radius), step: '1'});
-        const data = await request<Terrain>('/api/map/terrain?' + query, {signal: current.signal});
-        if (!active || current.signal.aborted) return;
-        setLoading(false); setError(''); setPending(data.pending);
-        setCache(previous => ({world: name, tiles: mergeSurfaceTiles(previous.world, previous.tiles, name, data.tiles, viewport)}));
-        if (data.pending && ++attempts < 16) schedule(1800); else schedule(120000);
-      } catch (reason) {
-        if (active && !document.hidden) {setLoading(false); setPending(false); setError(detail(reason));}
-      } finally {clearTimeout(deadline);}
+        const next = await request<ImageManifest>('/api/map/images?world=' + encodeURIComponent(name), {signal: current.signal});
+        if (!active || current.signal.aborted || next.worldId !== worldId) return;
+        setManifest(next); setLoading(false); setError(''); schedule(next.status === 'rendering' ? 5000 : 60000);
+      } catch (reason) {if (active && !current.signal.aborted) {setLoading(false); setError(detail(reason)); schedule(15000);}}
     }
-    const visibility = () => {clearTimeout(timer); if (document.hidden) controller?.abort(); else {attempts = 0; schedule(250);}};
-    document.addEventListener('visibilitychange', visibility); schedule(250);
+    const visibility = () => {clearTimeout(timer); if (document.hidden) {controller?.abort(); release();} else schedule(100);};
+    document.addEventListener('visibilitychange', visibility); schedule(0);
     return () => {active = false; clearTimeout(timer); controller?.abort(); document.removeEventListener('visibilitychange', visibility);};
-    // Moving inside one chunk only repaints the cached image.
-  }, [world?.name, viewport, revision]);
+  }, [name, worldId, reload, release]);
 
-  const tiles = useMemo(() => cache.world === world?.name ? cache.tiles.filter(tile => Math.abs(tile.cx - viewport.cx) <= viewport.radius && Math.abs(tile.cz - viewport.cz) <= viewport.radius) : [], [cache, world?.name, viewport]);
-  useEffect(() => {view.current?.setTerrain(tiles, world?.name ?? '');}, [tiles, world?.name]);
-  const players = live.players.filter(p => p.online && p.world === world?.name && typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number');
   useEffect(() => {
-    view.current?.setMarkers(world ? [{...world.spawn, id: 'spawn', name: 'Spawn', spawn: true}, ...players.map(p => ({id: p.uuid, name: p.name, x: p.x!, y: p.y!, z: p.z!}))] : []);
-  }, [world, players]);
-  const jump = useCallback((x: number, z: number, y?: number) => {
-    const point = {x: Math.max(-29999840, Math.min(29999840, x)), y: y ?? world?.spawn.y ?? 64, z: Math.max(-29999840, Math.min(29999840, z))};
-    view.current?.setCenter(point, false, y === undefined); setDraft({x: String(Math.floor(point.x)), z: String(Math.floor(point.z))});
-  }, [world?.spawn.y]);
-  const ready = tiles.filter(tile => tile.status === 'ready').length, point = selected ?? hover;
-  const tileFailure = tiles.find(tile => tile.status === 'error' || tile.refreshStatus === 'error');
-  const mapError = error || (tileFailure ? t('Не удалось загрузить участок карты. Повторите попытку.', 'A map area could not be loaded. Please try again.') : '');
-  const deferred = tiles.some(tile => tile.status === 'deferred' || tile.refreshStatus === 'deferred');
+    if (!name) return;
+    let active = true, timer = 0, controller: AbortController | null = null;
+    const schedule = (ms: number) => {clearTimeout(timer); if (active && !document.hidden) timer = window.setTimeout(load, ms);};
+    async function load() {
+      if (!active || document.hidden) return;
+      const current = new AbortController(); controller = current;
+      try {
+        const next = await request<PlayerMarkers>('/api/map/players?world=' + encodeURIComponent(name), {signal: current.signal});
+        if (!active || current.signal.aborted || next.worldId !== worldId) return;
+        setPlayers(previous => sameMarkers(previous, next.players) ? previous : next.players); setPlayerError(''); schedule(2000);
+      } catch (reason) {if (active && !current.signal.aborted) {setPlayerError(detail(reason)); schedule(10000);}}
+    }
+    const visibility = () => {clearTimeout(timer); if (document.hidden) controller?.abort(); else schedule(100);};
+    document.addEventListener('visibilitychange', visibility); schedule(0);
+    return () => {active = false; clearTimeout(timer); controller?.abort(); document.removeEventListener('visibilitychange', visibility);};
+  }, [name, worldId, reload]);
+
+  useEffect(() => {
+    const state = fitting.current;
+    if (state.world !== worldId || state.touched || !data?.bounds || !data.scannedAt) return;
+    if (!state.fitted || state.width !== size.width || state.height !== size.height) {
+      setCamera(fitImage(data.bounds, size)); state.fitted = true; state.width = size.width; state.height = size.height;
+    }
+  }, [worldId, data?.bounds, data?.scannedAt, size]);
+
+  const move = useCallback((dx: number, dy: number) => {fitting.current.touched = true; setCamera(previous => panImage(previous, dx, dy));}, []);
+  const zoom = useCallback((factor: number, pointer?: {x: number; y: number}) => {fitting.current.touched = true; setCamera(previous => zoomImage(previous, factor, size, pointer));}, [size]);
+  useEffect(() => {
+    const element = stage.current; if (!element) return;
+    const wheel = (event: WheelEvent) => {event.preventDefault(); release(); const rect = element.getBoundingClientRect(); zoom(Math.exp(-Math.max(-120, Math.min(120, event.deltaY)) * .0025), {x: event.clientX - rect.left, y: event.clientY - rect.top});};
+    element.addEventListener('wheel', wheel, {passive: false}); return () => element.removeEventListener('wheel', wheel);
+  }, [zoom, release]);
+  const jump = (point: Position) => {release(); fitting.current.touched = true; setCamera(previous => ({...projectImage(point), scale: Math.max(1, previous.scale)})); setDraft({x: String(Math.floor(point.x)), z: String(Math.floor(point.z))});};
+  const fit = () => {release(); if (data?.bounds) {fitting.current.touched = true; setCamera(fitImage(data.bounds, size));}};
+  const images = useMemo(() => visibleImages(camera, size, data?.maxLevel ?? 20, data?.bounds ?? null), [camera, size, data?.maxLevel, data?.bounds]);
+  const center = unprojectImage(camera, world?.spawn.y ?? 64), updated = data?.updatedAt ? new Date(data.updatedAt).toLocaleTimeString() : '—';
+  const stateLabel = loading ? t('Открываем карту…', 'Opening map…') : data?.status === 'paused' ? t('Обновление на паузе', 'Updates paused') : data?.status === 'rendering' ? t('Рисуем сохранённый мир', 'Rendering saved world') : data?.status === 'empty' ? t('Мир пока не сохранён', 'No saved terrain yet') : data?.status === 'error' ? t('Обновление временно недоступно', 'Updates temporarily unavailable') : t('Карта сохранена', 'Map saved');
   const worldItem = world?.environment === 'NETHER' ? 'netherrack' : world?.environment === 'THE_END' ? 'end_stone' : 'grass_block';
 
-  return <div className="iso-map-page">
-    <header className="page-heading"><div><span className="eyebrow">{t('Твой мир', 'Your world')}</span><h1>{t('Карта мира', 'World map')}</h1><p>{t('Знакомые места. Новые маршруты.', 'Familiar places. New paths.')}</p></div><span className="iso-map-view-label"><span/>{t('Изометрия', 'Isometric view')}</span></header>
-    <div className="iso-map-toolbar">
-      <label className="iso-map-world"><GameImage kind="blocks" id={worldItem} size={28}/><span className="sr-only">{t('Мир', 'World')}</span><select value={world?.name ?? ''} onChange={e => setWorldName(e.target.value)}>{worlds.map(w => <option key={w.uuid} value={w.name}>{w.name}</option>)}</select></label>
-      <form className="iso-map-coordinates" onSubmit={e => {e.preventDefault(); const x = Number(draft.x), z = Number(draft.z); if (draft.x.trim() && draft.z.trim() && Number.isFinite(x) && Number.isFinite(z)) jump(x, z);}}>
-        {(['x', 'z'] as const).map(axis => <label key={axis}><span>{axis.toUpperCase()}</span><input type="number" required step="1" min={-29999840} max={29999840} aria-label={t('Координата', 'Coordinate') + ' ' + axis.toUpperCase()} value={draft[axis]} onChange={e => setDraft({...draft, [axis]: e.target.value})}/></label>)}
-        <Button type="submit" disabled={!world}>{t('Перейти', 'Go')}</Button>
+  return <div className="image-map-page">
+    <header className="page-heading"><div><span className="eyebrow">{t('Твой мир', 'Your world')}</span><h1>{t('Карта мира', 'World map')}</h1><p>{t('Весь знакомый мир. Игроки здесь и сейчас.', 'Your whole world. Players here and now.')}</p></div><span className="image-map-view-label"><i/>{t('Изометрия', 'Isometric view')}</span></header>
+    <div className="image-map-toolbar">
+      <label className="image-map-world"><GameImage kind="blocks" id={worldItem} size={28}/><span className="sr-only">{t('Мир', 'World')}</span><select value={name} onChange={e => {release(); setWorldName(e.target.value);}}>{worlds.map(w => <option key={w.uuid} value={w.name}>{w.name}</option>)}</select></label>
+      <form className="image-map-coordinates" onSubmit={e => {e.preventDefault(); const x = Number(draft.x), z = Number(draft.z); if (draft.x.trim() && draft.z.trim() && Number.isFinite(x) && Number.isFinite(z)) jump({x: Math.max(-29999840, Math.min(29999840, x)), y: world?.spawn.y ?? 64, z: Math.max(-29999840, Math.min(29999840, z))});}}>
+        {(['x', 'z'] as const).map(axis => <label key={axis}><span>{axis.toUpperCase()}</span><input type="number" required min={-29999840} max={29999840} step="1" aria-label={t('Координата', 'Coordinate') + ' ' + axis.toUpperCase()} value={draft[axis]} onChange={e => setDraft({...draft, [axis]: e.target.value})}/></label>)}<Button type="submit" disabled={!world}>{t('Перейти', 'Go')}</Button>
       </form>
-      <div className="iso-map-toolbar-actions"><Button disabled={!world} onClick={() => world && jump(world.spawn.x, world.spawn.z, world.spawn.y)}><GameImage kind="items" id="compass" size={20}/>{t('Спавн', 'Spawn')}</Button><Button aria-label={t('Обновить карту', 'Refresh map')} title={t('Обновить карту', 'Refresh map')} onClick={() => setRevision(n => n + 1)} disabled={!world || loading}><Icon name="refresh"/></Button></div>
+      <div className="image-map-toolbar-actions"><Button onClick={fit} disabled={!data?.bounds}>{t('Весь мир', 'Whole world')}</Button><Button disabled={!world} onClick={() => world && jump(world.spawn)}><GameImage kind="items" id="compass" size={20}/>{t('Спавн', 'Spawn')}</Button><Button aria-label={t('Обновить состояние карты', 'Refresh map status')} title={t('Обновить состояние карты', 'Refresh map status')} onClick={() => setReload(n => n + 1)} disabled={!world || loading}><Icon name="refresh"/></Button></div>
     </div>
-    {mapError && <ErrorBox error={mapError} retry={() => setRevision(n => n + 1)}/>}
-    <div className="iso-map-layout">
-      <section className="iso-map-stage" data-smooth-scroll="off" aria-label={t('Карта', 'Map')}>
-        <canvas ref={canvas} tabIndex={0} role="img" aria-label={t('Изометрическая карта поверхности мира', 'Isometric world surface map')} aria-describedby="iso-map-help"/>
-        <div className="iso-map-location"><span>{world?.name ?? t('Загрузка мира…', 'Loading world…')}</span><strong>X {formatNumber(Math.floor(center.x))}<i/>Z {formatNumber(Math.floor(center.z))}</strong></div>
-        <div className="iso-map-compass" aria-hidden="true"><span>N</span><b>↖</b><span>E ↗</span></div>
-        {!ready && <div className="iso-map-empty" role="status"><GameImage kind="items" id="filled_map" size={48}/><h2>{mapError ? t('Участок недоступен', 'Area unavailable') : deferred ? t('Сервер занят', 'Server is busy') : loading || pending ? t('Открываем местность…', 'Opening terrain…') : t('Здесь пока нет карты', 'No map here yet')}</h2><p>{mapError ? t('Повторите загрузку или вернитесь к спавну.', 'Retry loading or return to spawn.') : deferred ? t('Загрузка продолжится, когда сервер освободится.', 'Loading will resume when the server is available.') : loading || pending ? t('Загружаем сохранённые участки мира.', 'Loading saved parts of the world.') : t('Эта область ещё не сохранена. Вернитесь к спавну или выберите другой участок.', 'This area has not been saved yet. Return to spawn or choose another area.')}</p>{!loading && !pending && <Button disabled={!world} onClick={() => world && jump(world.spawn.x, world.spawn.z, world.spawn.y)}>{t('К спавну', 'Return to spawn')}</Button>}</div>}
-        <div className="iso-map-controls"><div className="iso-map-zoom"><Button aria-label={t('Приблизить', 'Zoom in')} onClick={() => view.current?.zoomBy(1.25)}>+</Button><span>{Math.round(zoom * 100)}%</span><Button aria-label={t('Отдалить', 'Zoom out')} onClick={() => view.current?.zoomBy(.8)}>−</Button></div><div className="iso-map-pan">{([{label: t('Вверх', 'Up'), glyph: '↑', delta: [-8, -8]}, {label: t('Влево', 'Left'), glyph: '←', delta: [-8, 8]}, {label: t('Вправо', 'Right'), glyph: '→', delta: [8, -8]}, {label: t('Вниз', 'Down'), glyph: '↓', delta: [8, 8]}]).map(({label, glyph, delta}) => <Button key={glyph} aria-label={label} onClick={() => view.current?.pan(delta[0], delta[1])}>{glyph}</Button>)}</div></div>
-        <div className="iso-map-status"><span className={loading || pending ? 'is-loading' : ''}/>{mapError ? t('Участок недоступен', 'Area unavailable') : deferred ? t('Сервер занят · загрузка отложена', 'Server busy · loading deferred') : loading || pending ? t('Подгружаем участки', 'Loading areas') : ready ? t('Местность загружена', 'Terrain loaded') : t('Нет карты участка', 'No map data here')}</div>
+    {(error || data?.status === 'error' && data.message) && <ErrorBox error={error || data?.message || ''} retry={() => setReload(n => n + 1)}/>}
+    <div className="image-map-layout">
+      <section className="image-map-card">
+        <div ref={stage} className="image-map-stage" tabIndex={0} role="region" aria-label={t('Изометрическая карта мира', 'Isometric world map')} aria-describedby="image-map-help" data-smooth-scroll="off" data-image-tiles={images.length} data-image-level={images[0]?.level ?? 0} onPointerDown={e => {
+          if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return;
+          release(); fitting.current.touched = true; stage.current?.focus({preventScroll: true});
+          drag.current = {id: e.pointerId, x: e.clientX, y: e.clientY, camera: cameraRef.current}; e.currentTarget.setPointerCapture(e.pointerId); e.currentTarget.classList.add('is-dragging');
+        }} onPointerMove={e => {const held = drag.current; if (!held || held.id !== e.pointerId) return; setCamera(panImage(held.camera, held.x - e.clientX, held.y - e.clientY));}} onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release} onKeyDown={e => {
+          const delta: Record<string, [number, number]> = {ArrowLeft: [-64, 0], ArrowRight: [64, 0], ArrowUp: [0, -64], ArrowDown: [0, 64]};
+          if (delta[e.key]) {e.preventDefault(); release(); move(...delta[e.key]);} else if (e.key === '+' || e.key === '=') {e.preventDefault(); zoom(1.4);} else if (e.key === '-') {e.preventDefault(); zoom(1 / 1.4);} else if (e.key === 'Escape') release();
+        }}>
+          <div className="image-map-imagery" aria-hidden="true">{name && images.map(tile => {const position = screenPoint(tile, camera, size), span = tile.span * camera.scale; return <CachedTile key={`${worldId}:${tile.level}:${tile.x}:${tile.y}`} world={name} {...tile} revision={data?.revision ?? 0} style={{left: position.x, top: position.y, width: span + .25, height: span + .25}}/>;})}</div>
+          {world && (() => {const point = screenPoint(projectImage(world.spawn), camera, size); return <button className="image-map-pin is-spawn" style={{left: point.x, top: point.y}} onClick={() => jump(world.spawn)} aria-label={t('Точка появления', 'World spawn')} title={t('Точка появления', 'World spawn')}><span>⌂</span></button>;})()}
+          {players.map(player => {const point = screenPoint(projectImage(player), camera, size); return <button key={player.uuid} className="image-map-pin is-player" style={{left: point.x, top: point.y}} onClick={() => jump(player)} aria-label={player.name}><span/><strong>{player.name}</strong></button>;})}
+          <div className="image-map-location"><span>{name || t('Загрузка мира…', 'Loading world…')}</span><strong>X {formatNumber(Math.floor(center.x))}<i/>Z {formatNumber(Math.floor(center.z))}</strong></div>
+          <div className="image-map-compass" aria-hidden="true"><b>N ↖</b><span>E ↗</span></div>
+          {!data?.bounds && <div className="image-map-empty" role="status"><GameImage kind="items" id="filled_map" size={48}/><h2>{data?.status === 'error' ? t('Карта недоступна', 'Map unavailable') : loading || data?.status === 'rendering' ? t('Рисуем твой мир…', 'Mapping your world…') : data?.status === 'paused' ? t('Сервер занят', 'Server is busy') : t('Карта появится здесь', 'Your map will appear here')}</h2><p>{data?.status === 'error' ? t('Не удалось прочитать сохранённую местность. Проверьте сообщение об ошибке.', 'Saved terrain could not be read. Check the error message.') : loading || data?.status === 'rendering' ? t('Готовые участки появятся автоматически.', 'Rendered areas will appear automatically.') : data?.status === 'paused' ? t('Сохранённая карта остаётся доступной. Обновление продолжится позже.', 'Saved images remain available. Updates will resume later.') : t('Исследуйте мир в игре. Карта обновляется после сохранения мира.', 'Explore in game. The map updates after the world is saved.')}</p></div>}
+        </div>
+        <div className="image-map-controls"><div className="image-map-zoom"><Button aria-label={t('Приблизить', 'Zoom in')} onClick={() => {release(); zoom(1.4);}}>+</Button><span>{camera.scale >= .1 ? Math.round(camera.scale * 100) : (camera.scale * 100).toFixed(3)}%</span><Button aria-label={t('Отдалить', 'Zoom out')} onClick={() => {release(); zoom(1 / 1.4);}}>−</Button></div><div className="image-map-pan">{([{label: t('Вверх', 'Up'), glyph: '↑', delta: [0, -64]}, {label: t('Влево', 'Left'), glyph: '←', delta: [-64, 0]}, {label: t('Вправо', 'Right'), glyph: '→', delta: [64, 0]}, {label: t('Вниз', 'Down'), glyph: '↓', delta: [0, 64]}] as {label: string; glyph: string; delta: [number, number]}[]).map(({label, glyph, delta}) => <Button key={glyph} aria-label={label} onClick={() => {release(); move(...delta);}}>{glyph}</Button>)}</div></div>
       </section>
-      <aside className="iso-map-sidebar">
-        <WorldOverview index={index.data} cx={viewport.cx} cz={viewport.cz} jump={jump} t={t}/>
-        {index.error && <ErrorBox error={index.error} retry={index.reload}/>}
-        <section className="iso-map-panel"><div className="iso-map-panel-heading"><h3>{t('На карте', 'On the map')}</h3><span>{players.length} {t('в игре', 'online')}</span></div><button className="iso-map-marker" disabled={!world} onClick={() => world && jump(world.spawn.x, world.spawn.z, world.spawn.y)}><GameImage kind="items" id="compass" size={28}/><span><strong>{t('Точка появления', 'World spawn')}</strong><small>{world ? coordinates(world.spawn) : '—'}</small></span><Icon name="arrow" size={16}/></button>{players.map(player => <button key={player.uuid} className="iso-map-marker" onClick={() => jump(player.x!, player.z!, player.y!)}><span className="iso-map-player-dot"/><span><strong>{player.name}</strong><small>{coordinates({x: player.x!, y: player.y!, z: player.z!})}</small></span><Icon name="arrow" size={16}/></button>)}{!players.length && <p>{t('Игроков в этом мире пока нет.', 'No players in this world yet.')}</p>}</section>
-        <section className="iso-map-panel iso-map-point"><div className="iso-map-panel-heading"><h3>{t('Местность', 'Terrain')}</h3><span>{selected ? t('Выбрано', 'Selected') : t('Обзор', 'Explore')}</span></div>{point ? <div className="iso-map-point-detail"><GameImage kind="blocks" id={point.material} size={36}/><div><strong>{assetName(assets, 'blocks', point.material, lang)}</strong><p>{coordinates(point)}</p></div></div> : <p>{t('Наведите курсор или нажмите на участок, чтобы узнать его высоту.', 'Hover or select a surface to see its elevation.')}</p>}</section>
+      <aside className="image-map-sidebar">
+        <section className="image-map-panel"><div className="image-map-panel-heading"><h3>{t('Твой атлас', 'Your atlas')}</h3><span className={'image-map-status ' + (data?.status ?? '')}><i/>{stateLabel}</span></div><div className="image-map-summary"><strong>{formatNumber(data?.renderedChunks ?? 0)}</strong><span>{t('сохранённых чанков на карте', 'saved chunks mapped')}</span></div><dl><div><dt>{t('Обновлено', 'Updated')}</dt><dd>{updated}</dd></div><div><dt>{t('В игре', 'Online')}</dt><dd>{players.length}</dd></div></dl><p>{t('Карта обновляется в фоне. При просмотре меняются только позиции игроков.', 'The map updates in the background. Only player positions are live.')}</p>{data?.status === 'rendering' && <small>{t('Первое построение может занять время. Уже готовая местность доступна.', 'The first render takes time. Finished terrain is available as it is saved.')}</small>}</section>
+        <section className="image-map-panel"><div className="image-map-panel-heading"><h3>{t('На карте', 'On the map')}</h3><span>{players.length} {t('в игре', 'online')}</span></div><button className="image-map-marker" disabled={!world} onClick={() => world && jump(world.spawn)}><GameImage kind="items" id="compass" size={28}/><span><strong>{t('Точка появления', 'World spawn')}</strong><small>{world ? coordinates(world.spawn) : '—'}</small></span><Icon name="arrow" size={16}/></button>{players.map(player => <button key={player.uuid} className="image-map-marker" onClick={() => jump(player)}><i className="image-map-player-dot"/><span><strong>{player.name}</strong><small>{coordinates(player)}</small></span><Icon name="arrow" size={16}/></button>)}{!players.length && <p>{t('Игроков в этом мире пока нет.', 'No players in this world yet.')}</p>}{playerError && <p className="image-map-overlay-error" role="status">{t('Позиции игроков временно недоступны.', 'Player positions are temporarily unavailable.')}</p>}</section>
       </aside>
     </div>
-    <footer className="iso-map-footer"><p id="iso-map-help">{t('Перетаскивание — перемещение · Колесо или + / − — масштаб · Стрелки — движение', 'Drag to move · Wheel or + / − to zoom · Arrow keys to pan')}</p><span><i className="spawn"/>{t('Спавн', 'Spawn')}<i/>{t('Игроки', 'Players')}</span></footer>
+    <footer className="image-map-footer"><p id="image-map-help">{t('Перетаскивание — перемещение · Колесо или + / − — масштаб · Стрелки — движение', 'Drag to move · Wheel or + / − to zoom · Arrow keys to pan')}</p><span><i className="spawn"/>{t('Спавн', 'Spawn')}<i/>{t('Игроки', 'Players')}</span></footer>
   </div>;
 }

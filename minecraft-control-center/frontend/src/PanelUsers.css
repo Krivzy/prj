@@ -1,0 +1,9 @@
+.panel-users-list{display:grid;gap:10px}
+.panel-user-row{display:flex;align-items:center;gap:14px;min-width:0;padding:14px 0;border-bottom:1px solid var(--border,#34423c)}
+.panel-user-row:last-child{border-bottom:0}
+.panel-user-name{display:grid;gap:5px;flex:1;min-width:0}
+.panel-user-name strong{overflow-wrap:anywhere}
+.panel-user-name small{color:var(--muted,#a6b8af);font-size:12px}
+.panel-user-delete{min-height:44px;flex-shrink:0}
+.default-password-note{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 18px;margin-bottom:20px;border:1px solid #687549;background:#242c21;color:#d5dfbf;font-size:13px}
+@media(max-width:520px){.panel-user-row{gap:10px}.panel-user-delete span{display:none}.default-password-note{align-items:flex-start;flex-direction:column}.users-panel>.panel-heading{align-items:flex-start;gap:14px;flex-wrap:wrap}}

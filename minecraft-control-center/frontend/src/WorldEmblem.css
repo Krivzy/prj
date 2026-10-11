@@ -1,0 +1,20 @@
+.world-emblem {
+  display: inline-block;
+  flex: none;
+  aspect-ratio: 1;
+  overflow: visible;
+  vertical-align: middle;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+
+.world-emblem image {
+  image-rendering: pixelated;
+}
+
+/* Keep the established card grid without the old CSS cube transforms. */
+.main-content .world-tile > .world-emblem {
+  transform: none;
+  animation: none;
+  transition: none;
+}

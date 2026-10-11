@@ -11,7 +11,7 @@ export default function Login({status, onAuth, lang, changeLang}: {
   status: Auth; onAuth: (auth:Auth) => void; lang:'ru'|'en'; changeLang:() => void;
 }) {
   const t = (ru:string,en:string) => lang === 'ru' ? ru : en;
-  const [username,setUsername] = useState('');
+  const [username,setUsername] = useState(status.defaultAdminAvailable?'admin':'');
   const [password,setPassword] = useState('');
   const [token,setToken] = useState('');
   const [error,setError] = useState('');

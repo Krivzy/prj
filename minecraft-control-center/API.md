@@ -1,5 +1,15 @@
 # REST / WebSocket API
 
+## Действующий контракт0.6
+
+Карта0.6 использует постоянные PNG-тайлы. GET `/api/map/images?world=<name>` возвращает manifest, границы всей сохранённой FULL-поверхности, уровни пирамиды, состояние фонового обхода. GET `/api/map/images/tile?world=<name>&level=<n>&x=<n>&y=<n>` отдаёт PNG256×256, приватное кеширование60s и ETag/304. GET `/api/map/players?world=<name>` возвращает только текущие позиции игроков. Все требуют активную сессию и включённый модуль карты. Старые `/api/map`, `/api/map/terrain`, `/api/map/index`, `/api/map/detail`, `/api/map/region` и `/api/build/*` отвечают410 после аутентификации. Запрос изображения не читает игровые чанки и не запускает рендер.
+
+GET `/api/plugins/catalog?query=&sort=downloads&offset=0&limit=12&compatible=true&featured=false` доступен Admin/Owner; точная версия Minecraft берётся из Paper runtime. GET `/api/plugins/catalog/plan?projectId=<id>` доступен Owner и выдаёт actor-bound план на5min со стабильным совместимым релизом и обязательными зависимостями. POST `/api/plugins/catalog/install` требует Owner, CSRF, `confirmed:true`, `planId`, UUID `id`. Долгая операция отвечает202 с `pending:true`; GET `/api/actions/<id>` возвращает итог. GET `/api/plugins/catalog/installed` различает pending JAR и реально включённый PluginManager plugin. Установка требует обычный рестарт; `/reload` не используется.
+
+DELETE `/api/users/<username>` требует активный Owner и CSRF. Нельзя удалить себя либо последнего Owner; все сессии удалённого пользователя отзываются, audit остаётся. Новая пустая loopback-установка создаёт единственный admin/admin с Owner-правами; UI называет роль «Администратор панели». `defaultPassword` в auth/status обозначает начальный пароль. Такая учётная запись не допускается при allow-lan/public-origin либо нелокальном TCP source. Обычные обновления не меняют существующих пользователей.
+
+Подробности: [карта](docs/ISOMETRIC-MAP.md), [плагины](docs/PLUGIN-CATALOG.md), [пользователи](docs/LOCAL-ADMIN.md). Более ранние контракты ниже сохраняются как история и применяются только там, где0.6 их не заменяет.
+
 Base: `http://localhost:8080`. API ответы JSON; authenticated изменения требуют cookie `MCC_SESSION` и header `X-MCC-CSRF`. Получите CSRF из `/api/auth/status` или результата login/setup. Browser credentials: same-origin. Примеры не содержат credentials.
 
 | Endpoint | Метод | Назначение |
@@ -41,7 +51,7 @@ Base: `http://localhost:8080`. API ответы JSON; authenticated измене
 
 Ошибки: 400 validation/unsupported operation/явный JSON size check; 401 session missing; 403 permissions/CSRF/Origin/Host; 409 inventory conflict; 413 HTTP body limit; 429 rate limit; 503 queue/module availability. При потере связи обновите реальное состояние; не создавайте новый id для слепого повтора опасного действия.
 
-Основные action roots: `world.*`, `server.settings`, `player.*`, `players.heal_all`, `inventory.set/move`, `mob.spawn/modify`, `chat.broadcast`, `console.command`, `event.start/pause/stop`. Поддержанные параметры валидируются в `GameService.java`; ограничения игровых операций описаны в [docs/GAME-API.md](docs/GAME-API.md). Интерфейс предоставляет подмножество этих действий, перечисленное в [docs/VISUAL-AUDIT-0.5.md](docs/VISUAL-AUDIT-0.5.md).
+Основные action roots: `world.*`, `server.settings`, `player.*`, `players.heal_all`, `inventory.set/move`, `mob.spawn/modify`, `chat.broadcast`, `console.command`, `event.start/pause/stop`. Поддержанные параметры валидируются в `GameService.java`; ограничения игровых операций описаны в [docs/GAME-API.md](docs/GAME-API.md). Интерфейс предоставляет подмножество этих действий, перечисленное в [docs/VISUAL-AUDIT-0.6.md](docs/VISUAL-AUDIT-0.6.md).
 
 Inventory mutation требует {uuid,kind,revision,...}. move меняет местами {from,to}; set задаёт {slot,item}, null удаляет предмет после явного подтверждения. item содержит material/amount и поддержанные optional поля.
 

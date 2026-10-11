@@ -2,6 +2,7 @@ import {useEffect, useState} from 'react';
 import type {ReactNode} from 'react';
 import {motion} from 'motion/react';
 import {useApp} from './context';
+import {roleLabel} from './roleLabel';
 import type {Page} from './context';
 import {useLive} from './live';
 import {availablePages, pages} from './navigation';
@@ -61,7 +62,7 @@ export default function Shell({page, changeLang, profile, logout, children}: {
             <button className="command-launcher" onClick={() => {setQuery(''); setCommands(true);}} aria-label={app.t('Найти раздел','Find a section')}><Icon name="search" size={17}/><span>{app.t('Перейти к…','Jump to…')}</span><kbd>Ctrl K</kbd></button>
             <span className={`connection ${live.status}`}><i/>{connected ? app.t('Подключён','Connected') : live.status === 'connecting' ? app.t('Подключение','Connecting') : app.t('Нет связи','Offline')}</span>
             <button className="language-button" onClick={changeLang} aria-label={app.t('Switch to English','Переключить на русский')}>{app.lang === 'ru' ? 'EN' : 'RU'}</button>
-            <button className="user-chip" onClick={profile} aria-label={app.t('Открыть мой профиль','Open my account')}><span>{app.auth.user?.name?.slice(0,1).toUpperCase()}</span><div>{app.auth.user?.name}<small>{app.auth.user?.role}</small></div></button>
+            <button className="user-chip" onClick={profile} aria-label={app.t('Открыть мой профиль','Open my account')}><span>{app.auth.user?.name?.slice(0,1).toUpperCase()}</span><div>{app.auth.user?.name}<small>{roleLabel(app.auth.user?.role,app.lang)}</small></div></button>
             <button className="icon-button logout-button" onClick={logout} aria-label={app.t('Выйти','Sign out')}><Icon name="logout" size={18}/></button>
           </div>
         </header>

@@ -1,0 +1,4 @@
+/** The catalog may contain metadata-only matches. Only a reviewed stable exact release enables install. */
+export type InstallableProject={projectId:string;compatibility:string;version?:{id:string;number:string;type:string};stale?:boolean};
+export function canReviewPlugin(project:InstallableProject,owner:boolean,busy:boolean){return owner&&!busy&&project.compatibility==='metadata-confirmed'&&!!project.projectId&&!!project.version?.id&&project.version.type==='release'&&!project.stale;}
+export function catalogPath(query:string,sort:string,offset:number,limit:number,compatible:boolean,featured:boolean){const params=new URLSearchParams({query:query.trim(),sort,offset:String(offset),limit:String(limit),compatible:String(compatible),featured:String(featured)});return `/api/plugins/catalog?${params}`;}

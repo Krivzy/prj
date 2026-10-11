@@ -72,11 +72,11 @@ class AuthTest {
         assertDoesNotThrow(() -> Auth.validateCredentials("safe_user-25", "Long-enough-test-password"));
     }
 
-    @Test void legacyBootstrapOptionStillRequiresPrivateSetupAndAccountChangesRotateSessions() throws Exception {
+    @Test void privateSetupOptionAndAccountChangesRotateSessions() throws Exception {
         Path file=directory.resolve("database.db");
         String originalPassword="Original-test-only-password!";
         try(Database db=new Database(file)) {
-            Auth auth=new Auth(db,directory,true,true);
+            Auth auth=new Auth(db,directory,false,true);
             assertTrue(auth.setupRequired());assertEquals(0,db.userCount().get());
             String token=Files.readString(directory.resolve(".setup-token"));
             auth.setup(token,"test-owner",originalPassword,true);
@@ -92,13 +92,13 @@ class AuthTest {
             assertThrows(SecurityException.class,()->auth.changeAccount(first,"Changed-test-only-password!","another-owner",null));
         }
         try(Database db=new Database(file)) {
-            Auth restarted=new Auth(db,directory,true,true);
+            Auth restarted=new Auth(db,directory,false,true);
             assertFalse(restarted.setupRequired());assertEquals(1,db.userCount().get());assertNull(db.user("test-owner").get());
             assertEquals("Owner",restarted.login("renamed-owner","Changed-test-only-password!").role());
         }
     }
 
-    @Test void freshDefaultConfigurationDoesNotCreateAnyBuiltInUser() throws Exception {
+    @Test void disabledBootstrapRequiresPrivateSetup() throws Exception {
         try(Database db=new Database(directory.resolve("database.db"))) {
             Auth auth=new Auth(db,directory,false,true);
             assertTrue(auth.setupRequired());assertEquals(0,db.userCount().get());
@@ -114,7 +114,7 @@ class AuthTest {
             assertEquals("Owner",enabled.login("existing-owner","Existing-owner-test-password!").role());
             assertEquals("Viewer",enabled.login("admin","Existing-admin-test-password!").role());
             assertThrows(SecurityException.class,()->enabled.login("admin","admin"));
-            assertThrows(SecurityException.class,()->new Auth(db,directory,true,false));
+            assertDoesNotThrow(()->new Auth(db,directory,true,false));
             assertEquals(2,db.userCount().get());
         }
     }

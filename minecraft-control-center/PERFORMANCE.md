@@ -1,5 +1,13 @@
 # Текущая карта: surface-only Canvas2D
 
+## Архитектура карты0.6
+
+Просмотр карты запрашивает manifest из памяти, PNG из ограниченного tile cache/локального файла и позиции игроков. Он не читает Anvil, не вызывает ChunkSnapshot/getChunkAtAsync и не генерирует рельеф. Отдельный единственный worker минимального приоритета сканирует сохранённые данные независимо от зрителей; цикл≤8ms целевых квантов и duty≤10% с паузой при TPS<18/MSPT>45. Заголовки проверяются примерно раз60s, принудительная перепроверка сохранённых records раз300s. Первый render неизбежно расходует CPU/диск, последующие обновления ограничены изменёнными records. PNG256 и zoom pyramid хранятся на диске между перезапусками. Это архитектурные лимиты; жёсткое время выполнения отдельного декодирования/PNG writer зависит от оборудования и не является SLA.
+
+Клиент использует ограниченное количество обычных `<img>`-тайлов, fixed projection, pan/zoom и отдельные player markers. Геометрия чанков, текстуры и 3D render loop отсутствуют. Видимый/скрытый lifecycle и интервалы определены в [ISOMETRIC-MAP.md](docs/ISOMETRIC-MAP.md). Каталог не запрашивается на других страницах, пагинирован, metadata cache ограничен; сетевые операции работают вне Minecraft main thread.
+
+Native результаты0.6 приведены в [VISUAL-AUDIT-0.6.md](docs/VISUAL-AUDIT-0.6.md). Ниже сохранены измерения прошлых версий; они не доказывают FPS/CPU0.6 и не обещают нулевую нагрузку первого рендера.
+
 Фиксированная изометрическая карта использует верхнюю поверхность каждого чанка: максимум256 BlockData reads вместо3072 позиций объёмного surface-depth sampler. `voxels/depth`, detail region и строительный engine удалены. Это доказуемое ограничение числа читаемых позиций, а не измерение CPU overhead: отдельный многопользовательский benchmark не выполнен. Browser рисует по запросу, без постоянного render loop и вращения.
 
 Сервер сохраняет bounds, cache/pending64, asyncLoads1 (`generate=false`, включая preflight), один snapshot за tick при TPS≥18; обработка снимка выполняется serial worker1/queue8. Disk-only preflight принимает только persisted Status=FULL, с лимитами1MiB compressed/2MiB decoded/depth32; Bukkit API из worker не вызывается. Snapshot снимается немедленно в main-thread completion до освобождения Paper CHUNK_LOAD ticket; MCC не добавляет ENTITY_TICKING plugin tickets и не переносит Chunk на следующий tick. LowTPS/same-tick completion получает deferred без удержания. Разовый захват не прерывается по таймеру, поэтому main-thread budget1 ms остаётся мягким. Готовые tiles кешируются120 s. Просмотр далёких существующих чанков имеет ограниченную ненулевую нагрузку.

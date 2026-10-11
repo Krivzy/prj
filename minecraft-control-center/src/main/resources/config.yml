@@ -6,9 +6,10 @@ web:
   public-origin: ''
   secure-cookie: false
 auth:
-  # Legacy compatibility option; shared-password bootstrap is disabled in 0.4.
-  # A fresh database requires the private, single-use .setup-token on loopback.
-  bootstrap-admin: false
+  # Creates admin with the initial password admin on an empty loopback installation only.
+  # Change the initial password in My account before allowing remote access.
+  # Existing users are preserved. false or LAN mode uses private-token setup instead.
+  bootstrap-admin: true
 performance:
   profile: balanced
 modules:

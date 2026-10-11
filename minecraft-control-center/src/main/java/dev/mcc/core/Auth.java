@@ -10,7 +10,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class Auth {
-    public record Session(String id,String name,String role,String csrf,long expires) {}
+    public record Session(String id,String name,String role,String csrf,long expires,boolean defaultPassword) {}
     private static final SecureRandom RANDOM=new SecureRandom();
     private final Database db;
     private final ConcurrentHashMap<String,Session> sessions=new ConcurrentHashMap<>();
@@ -18,13 +18,15 @@ public final class Auth {
     private final Path tokenFile;
     private volatile String setupToken;
     private final Semaphore hashing = new Semaphore(2);
+    private final Set<String> defaultAccounts=ConcurrentHashMap.newKeySet();
     public Auth(Database db,Path directory) throws Exception {
         this(db,directory,false,true);
     }
     public Auth(Database db,Path directory,boolean bootstrapAdmin,boolean loopbackOnly) throws Exception {
         this.db=db;tokenFile=directory.resolve(".setup-token");
-        // The legacy option never creates a shared-password account. Existing users stay intact.
-        if(bootstrapAdmin&&!loopbackOnly)throw new SecurityException("Legacy bootstrap option requires loopback");
+        // A public default may bootstrap only an empty loopback installation. Existing accounts are preserved.
+        if(bootstrapAdmin&&loopbackOnly&&db.userCount().get()==0)db.bootstrapAdmin(limitedHash("admin")).get();
+        for(Map<String,Object> account:db.documents("auth-default-account").get())defaultAccounts.add((String)account.get("name"));
         setupRequired.set(db.userCount().get()==0);
         if(setupRequired.get()){
             setupToken=token();Files.writeString(tokenFile,setupToken,StandardCharsets.UTF_8);
@@ -58,17 +60,33 @@ public final class Auth {
         setupRequired.set(false);setupToken=null;Files.deleteIfExists(tokenFile);return createSession(name,"Owner");
     }
     public synchronized Session login(String name,String password) throws Exception {
+        return login(name,password,true);
+    }
+    public synchronized Session login(String name,String password,boolean local) throws Exception {
         if(name==null||password==null||name.length()>32||password.length()>128)throw new SecurityException("Invalid credentials");
         if(!hashing.tryAcquire())throw new IllegalStateException("Authentication busy, retry shortly");
         try{Map<String,Object> user=db.user(name).get();String stored=user==null?"":(String)user.get("hash");
             // Unknown users still pay a KDF cost to reduce username enumeration.
             boolean match=user==null?constant(hash(password),stored):verify(password,stored);
-            if(!match)throw new SecurityException("Invalid credentials");return createSession(name,(String)user.get("role"));
+            if(!match)throw new SecurityException("Invalid credentials");
+            if(defaultAccounts.contains(name)&&!local)throw new SecurityException("Change the initial password locally before remote access");
+            return createSession(name,(String)user.get("role"));
         }finally{hashing.release();}
     }
     public synchronized void createUser(String name,String password,String role) throws Exception {
         validateCredentials(name,password);if(!Set.of("Owner","Admin","Moderator","Viewer").contains(role))throw new IllegalArgumentException("Invalid role");
         if(db.userCount().get()>=100)throw new IllegalStateException("User limit reached");db.createUser(name,limitedHash(password),role,false).get();
+    }
+    public synchronized void createUser(Session actor,String name,String password,String role)throws Exception {
+        if(actor==null||session(actor.id())!=actor||!actor.role().equals("Owner"))throw new SecurityException("Full administrator access is required");
+        createUser(name,password,role);
+    }
+    /** Delete on the serialized DB writer, then revoke every login for that account. Audit/history remain intact. */
+    public synchronized void deleteUser(Session actor,String name) throws Exception {
+        if(actor==null||session(actor.id())!=actor||!actor.role().equals("Owner"))throw new SecurityException("Full administrator access is required");
+        validateUsername(name);if(actor.name().equals(name))throw new IllegalArgumentException("You cannot delete your own account");
+        if(!db.deleteUser(name).get())throw new IllegalArgumentException("User does not exist");
+        sessions.values().removeIf(existing->existing.name().equals(name));defaultAccounts.remove(name);
     }
     /** Re-authenticate, update atomically, revoke every prior login, and return a rotated session. */
     public synchronized Session changeAccount(Session session,String currentPassword,String newUsername,String newPassword)throws Exception {
@@ -81,16 +99,17 @@ public final class Auth {
             Map<String,Object> stored=db.user(session.name()).get();if(stored==null||!verify(currentPassword,(String)stored.get("hash")))throw new SecurityException("Current password is incorrect");
             if(!name.equals(session.name())&&db.user(name).get()!=null)throw new IllegalArgumentException("Username already exists");
             String oldHash=(String)stored.get("hash"),newHash=changePassword?hash(newPassword):oldHash;
-            if(!db.changeUser(session.name(),oldHash,name,newHash).get())throw new SecurityException("Account changed concurrently; log in again");
+            if(!db.changeUser(session.name(),oldHash,name,newHash,changePassword).get())throw new SecurityException("Account changed concurrently; log in again");
+            boolean hadDefault=defaultAccounts.remove(session.name());if(hadDefault&&!changePassword)defaultAccounts.add(name);
             sessions.values().removeIf(existing->existing.name().equals(session.name()));
             return createSession(name,(String)stored.get("role"));
         }finally{hashing.release();}
     }
-    private Session createSession(String name,String role){cleanup();if(sessions.size()>=512)throw new IllegalStateException("Session limit reached");Session s=new Session(token(),name,role,token(),System.currentTimeMillis()+TimeUnit.HOURS.toMillis(8));sessions.put(s.id(),s);return s;}
+    private Session createSession(String name,String role){cleanup();if(sessions.size()>=512)throw new IllegalStateException("Session limit reached");Session s=new Session(token(),name,role,token(),System.currentTimeMillis()+TimeUnit.HOURS.toMillis(8),defaultAccounts.contains(name));sessions.put(s.id(),s);return s;}
     public Session session(String token){if(token==null)return null;Session s=sessions.get(token);if(s!=null&&s.expires()>System.currentTimeMillis())return s;sessions.remove(token);return null;}
     public void logout(Session s){if(s!=null)sessions.remove(s.id());}
     public void cleanup(){long now=System.currentTimeMillis();sessions.values().removeIf(s->s.expires()<now);}
     public boolean setupRequired(){return setupRequired.get();}
     public static boolean constant(String a,String b){return a!=null&&b!=null&&MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8),b.getBytes(StandardCharsets.UTF_8));}
-    public Map<String,Object> status(Session s){Map<String,Object> out=new LinkedHashMap<>();out.put("setupRequired",setupRequired());out.put("authenticated",s!=null);out.put("user",s==null?null:Map.of("name",s.name(),"role",s.role()));out.put("csrf",s==null?null:s.csrf());return out;}
+    public Map<String,Object> status(Session s){Map<String,Object> out=new LinkedHashMap<>();out.put("setupRequired",setupRequired());out.put("authenticated",s!=null);out.put("defaultAdminAvailable",s==null&&defaultAccounts.contains("admin"));out.put("defaultPassword",s!=null&&s.defaultPassword());out.put("user",s==null?null:Map.of("name",s.name(),"role",s.role()));out.put("csrf",s==null?null:s.csrf());return out;}
 }

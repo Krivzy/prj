@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.*;
 public final class MccPlugin extends JavaPlugin {
     private volatile Database db;private volatile Auth auth;private volatile Realtime realtime;private volatile WebServer web;
     private volatile Automation automation;private volatile Backup backup;private volatile LogTail tail;private volatile PluginStage pluginStage;
+    private volatile PluginCatalog pluginCatalog;private volatile List<Map<String,Object>> catalogPlugins=List.of();private String catalogMinecraftVersion;
     private GameService game;private MainThread main;private volatile PunishmentEngine punishments;
     private ScheduledExecutorService background;
     private volatile Map<String,Object> latest=Map.of("status","starting");
@@ -40,6 +41,7 @@ public final class MccPlugin extends JavaPlugin {
             modules.put("chat",getConfig().getBoolean("modules.chat",true));modules.put("events",getConfig().getBoolean("modules.events",true));modules.put("automations",getConfig().getBoolean("modules.automations",true));modules.put("map",getConfig().getBoolean("modules.map",false));
             profile=getConfig().getString("performance.profile","balanced").toLowerCase(Locale.ROOT);if(!Set.of("eco","balanced","performance").contains(profile))profile="balanced";
             main=new MainThread(this);game=new GameService(this,this::gameEvent);
+            catalogMinecraftVersion=Bukkit.getMinecraftVersion();catalogPlugins=List.copyOf(game.plugins());
             game.setConsoleAllowedCommands(new HashSet<>(getConfig().getStringList("console.allowed-commands")));
             background=Executors.newSingleThreadScheduledExecutor(r->{Thread t=new Thread(r,"MCC-Background");t.setDaemon(true);return t;});
             background.execute(this::initialize);
@@ -51,7 +53,7 @@ public final class MccPlugin extends JavaPlugin {
         try{
             db=new Database(getDataFolder().toPath().resolve("database.db"));if(stopping.get()){db.close();return;}
             boolean localOnly=java.net.InetAddress.getByName(bind).isLoopbackAddress()&&!getConfig().getBoolean("web.allow-lan",false)&&getConfig().getString("web.public-origin","").isBlank();
-            auth=new Auth(db,getDataFolder().toPath(),getConfig().getBoolean("auth.bootstrap-admin",false),localOnly);realtime=new Realtime(auth);
+            auth=new Auth(db,getDataFolder().toPath(),getConfig().getBoolean("auth.bootstrap-admin",true),localOnly);realtime=new Realtime(auth);
             punishments=new PunishmentEngine(this,db,main,this::gameEvent);punishments.start().get();
             List<Map<String,Object>> settings=db.documents("settings").get();if(!settings.isEmpty())loadSettings(settings.getFirst());
             Map<UUID,Long> mutes=new HashMap<>();for(Map<String,Object> mute:db.documents("mutes").get())if(mute.get("uuid") instanceof String uuid&&mute.get("expiresAt") instanceof Number expiry)mutes.put(UUID.fromString(uuid),expiry.longValue());
@@ -62,6 +64,7 @@ public final class MccPlugin extends JavaPlugin {
             }
             main.await(()->{game.setModerationPersistence(this::persistMute);game.setMuteLookup(punishments::muted);game.restoreKnownPlayers(known);game.setEventsEnabled(module("events"));game.setMapEnabled(module("map"));return null;});
             automation=new Automation(db,main,game);automation.setEvents(this::gameEvent);automation.enabled(module("automations"));backup=new Backup(db,getDataFolder().toPath());pluginStage=new PluginStage(db,getDataFolder().toPath());
+            pluginCatalog=new PluginCatalog(db,getDataFolder().toPath(),catalogMinecraftVersion,()->catalogPlugins);
             tail=new LogTail(Path.of("logs","latest.log"),realtime);gameSnapshot=main.await(game::snapshot);publishSnapshot();
             if(stopping.get()){closeServices();return;}
             web=new WebServer(this,auth,db,main,game,realtime,bind,port,getConfig().getBoolean("web.allow-lan",false),getConfig().getString("web.public-origin",""),getConfig().getBoolean("web.secure-cookie",false));
@@ -76,7 +79,7 @@ public final class MccPlugin extends JavaPlugin {
         int interval=profile.equals("eco")?5:profile.equals("performance")?1:2;
         if(Bukkit.getTPS()[0]<18)interval=Math.max(interval,5);
         if(pulses%interval!=0&&!refresh.getAndSet(false))return;
-        long start=System.nanoTime();try{gameSnapshot=game.snapshot();}catch(Exception e){getLogger().warning("MCC snapshot failed: "+e.getClass().getSimpleName());}
+        long start=System.nanoTime();try{gameSnapshot=game.snapshot();catalogPlugins=List.copyOf(game.plugins());}catch(Exception e){getLogger().warning("MCC snapshot failed: "+e.getClass().getSimpleName());}
         long nanos=System.nanoTime()-start;snapshotCount.incrementAndGet();snapshotNanos.addAndGet(nanos);
         synchronized(snapshotSamples){snapshotSamples[sampleCursor++%512]=nanos;sampleSize=Math.min(512,sampleSize+1);long[] sorted=Arrays.copyOf(snapshotSamples,sampleSize);Arrays.sort(sorted);snapshotP95=sorted[(int)Math.floor((sampleSize-1)*.95)]/1e6;}
     }
@@ -124,6 +127,7 @@ public final class MccPlugin extends JavaPlugin {
     public Automation automation(){return automation;}
     public Backup backup(){return backup;}
     public PluginStage pluginStage(){return pluginStage;}
+    public PluginCatalog pluginCatalog(){PluginCatalog value=pluginCatalog;if(value==null)throw new IllegalStateException("Plugin catalog is not ready");return value;}
     public PunishmentEngine punishments(){return punishments;}
     public Path backupServerProperties() throws Exception {
         Path source=Path.of("server.properties").toAbsolutePath().normalize();
@@ -156,7 +160,7 @@ public final class MccPlugin extends JavaPlugin {
         if(!(sender instanceof ConsoleCommandSender)&&!sender.hasPermission("mcc.status")){sender.sendPlainMessage("No permission");return true;}
         sender.sendPlainMessage("MCC: "+(web!=null?"online":"unavailable")+"; dashboard http://localhost:"+port+"; first setup token: plugins/MinecraftControlCenter/.setup-token");return true;
     }
-    private void closeServices(){Automation a=automation;automation=null;if(a!=null)a.close();WebServer w=web;web=null;if(w!=null)w.close();PunishmentEngine p=punishments;punishments=null;if(p!=null)p.close();Realtime r=realtime;realtime=null;if(r!=null)r.close();Database d=db;db=null;if(d!=null)d.close();}
+    private void closeServices(){Automation a=automation;automation=null;if(a!=null)a.close();WebServer w=web;web=null;if(w!=null)w.close();PluginCatalog c=pluginCatalog;pluginCatalog=null;if(c!=null)c.close();PunishmentEngine p=punishments;punishments=null;if(p!=null)p.close();Realtime r=realtime;realtime=null;if(r!=null)r.close();Database d=db;db=null;if(d!=null)d.close();}
     @Override public void onDisable(){
         stopping.set(true);Automation a=automation;automation=null;if(a!=null)a.close();if(main!=null)main.close();if(game!=null)game.close();Bukkit.getScheduler().cancelTasks(this);
         if(background!=null)background.shutdownNow();closeServices();getLogger().info("Minecraft Control Center stopped; resources released.");

@@ -1,3 +1,4 @@
+import './PanelUsers.css';
 import {lazy, Suspense, useCallback, useEffect, useRef, useState} from 'react';
 import {motion, useReducedMotion} from 'motion/react';
 import {ApiError, execute, post, request, setAuth} from './api';
@@ -101,6 +102,7 @@ export default function App() {
   return <AppContext.Provider value={{auth,lang,t,navigate,action,confirm,notify,readonly:role === 'viewer',administrator:['owner','admin'].includes(role),owner:role === 'owner'}}>
     <Shell page={page} changeLang={() => setLang(value => value === 'ru' ? 'en' : 'ru')} profile={() => setProfile(true)} logout={() => void logout()}>
       <main id="main" className="main-content" tabIndex={-1}>
+        {auth.defaultPassword&&<div className="default-password-note"><span>{t('Используется стартовый пароль. Смените его в профиле перед удалённым доступом.','You are using the initial password. Change it in your profile before remote access.')}</span><Button onClick={()=>setProfile(true)}>{t('Мой профиль','My account')}</Button></div>}
         {role === 'viewer' && <div className="viewer-note"><Icon name="check" size={16}/>{t('Режим просмотра','Read-only mode')}</div>}
         {live.error && <div className="error-box" role="alert">{live.error}<button onClick={() => void refreshLive()}>{t('Обновить','Refresh')}</button></div>}
         <motion.div key={page} className="page-transition" initial={reduce ? false : {opacity:0,y:8}} animate={{opacity:1,y:0}} transition={{duration:.22,ease:[.2,.8,.2,1]}}>

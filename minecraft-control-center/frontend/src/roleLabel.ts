@@ -1,0 +1,1 @@
+export function roleLabel(role:string|undefined,lang:string){const ru=lang==='ru';return ({Owner:ru?'Администратор панели':'Panel administrator',Admin:ru?'Администратор сервера':'Server administrator',Moderator:ru?'Модератор':'Moderator',Viewer:ru?'Наблюдатель':'Viewer'} as Record<string,string>)[role??'']??role??'';}

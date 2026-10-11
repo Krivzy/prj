@@ -3,6 +3,7 @@ package dev.mcc.web;
 import dev.mcc.MccPlugin;
 import dev.mcc.core.*;
 import dev.mcc.game.GameService;
+import dev.mcc.game.SavedImageMap;
 import io.undertow.*;
 import io.undertow.server.*;
 import io.undertow.server.handlers.CookieImpl;
@@ -19,7 +20,7 @@ public final class WebServer implements AutoCloseable {
     private static final Set<String> MOD_ACTIONS=Set.of("player.warn","player.kick","player.ban","player.unban","player.mute","player.unmute","player.heal","player.feed","player.message","chat.broadcast","player.freeze","player.unfreeze");
     private static final Set<String> CONFIRMED=Set.of("player.kick","player.ban","player.ipban","player.ban_ip","player.unban_ip","player.op","player.deop","player.kill","player.clear_inventory","player.remove_item","inventory.set","mob.modify","world.border","console.command","server.settings");
     private final MccPlugin plugin;private final Auth auth;private final Database db;private final MainThread main;private final GameService game;private final Realtime realtime;
-    private final Set<String> origins,hosts;private final boolean secureCookie;private final RateLimiter rate=new RateLimiter();private Undertow server;
+    private final Set<String> origins,hosts;private final boolean secureCookie,localDefaultMode;private final RateLimiter rate=new RateLimiter();private Undertow server;
     private final ThreadPoolExecutor http=new ThreadPoolExecutor(4,4,0,TimeUnit.SECONDS,new ArrayBlockingQueue<>(128),r->{Thread t=new Thread(r,"MCC-HTTP");t.setDaemon(true);return t;});
     private record Request(String fingerprint,CompletableFuture<Object> result,long created){}
     private final ConcurrentHashMap<String,Request> requests=new ConcurrentHashMap<>();
@@ -27,6 +28,7 @@ public final class WebServer implements AutoCloseable {
     public WebServer(MccPlugin plugin,Auth auth,Database db,MainThread main,GameService game,Realtime realtime,String host,int port,boolean allowLan,String publicOrigin,boolean secureCookie)throws Exception{
         this.plugin=plugin;this.auth=auth;this.db=db;this.main=main;this.game=game;this.realtime=realtime;this.secureCookie=secureCookie;
         InetAddress bind=InetAddress.getByName(host);if(!bind.isLoopbackAddress()&&!allowLan)throw new IllegalArgumentException("Non-loopback bind requires web.allow-lan: true");
+        localDefaultMode=bind.isLoopbackAddress()&&!allowLan&&publicOrigin.isBlank();
         if(port<1024||port>65535)throw new IllegalArgumentException("HTTP port must be 1024–65535");
         Set<String> allowed=new HashSet<>();if(bind.isLoopbackAddress()){allowed.add("http://localhost:"+port);allowed.add("http://127.0.0.1:"+port);allowed.add("http://[::1]:"+port);}
         if(!publicOrigin.isBlank()){URI uri=URI.create(publicOrigin);if(!Set.of("http","https").contains(uri.getScheme())||uri.getHost()==null||uri.getRawUserInfo()!=null||uri.getRawQuery()!=null||uri.getRawFragment()!=null||!(uri.getPath()==null||uri.getPath().isEmpty()))throw new IllegalArgumentException("web.public-origin must be an origin without path");allowed.add(publicOrigin);}
@@ -40,7 +42,7 @@ public final class WebServer implements AutoCloseable {
                 if(requestHost==null||!hosts.contains(requestHost.toLowerCase(Locale.ROOT))){respond(e,403,Map.of("error","invalid_host","message","Host is not allowed"));return;}
                 String origin=e.getRequestHeaders().getFirst(Headers.ORIGIN);if(origin!=null&&!origins.contains(origin)){respond(e,403,Map.of("error","invalid_origin","message","Origin is not allowed"));return;}
                 if(e.getRequestPath().equals("/ws")){
-                    Auth.Session s=session(e);if(s==null||origin==null){respond(e,401,Map.of("error","unauthorized","message","Authenticated same-origin WebSocket required"));return;}
+                    Auth.Session s=session(e);if(s==null||origin==null||s.defaultPassword()&&!(localDefaultMode&&e.getSourceAddress().getAddress().isLoopbackAddress())){respond(e,401,Map.of("error","unauthorized","message","Authenticated same-origin WebSocket required"));return;}
                     e.putAttachment(SESSION,s);websocket.handleRequest(e);return;
                 }
                 boolean upload=e.getRequestPath().equals("/api/plugins/stage");e.setMaxEntitySize(upload?16*1024*1024L:65536L);
@@ -53,19 +55,28 @@ public final class WebServer implements AutoCloseable {
         try{
             e.startBlocking();String path=e.getRequestPath();boolean get=e.getRequestMethod().equals(Methods.GET),post=e.getRequestMethod().equals(Methods.POST),delete=e.getRequestMethod().equals(Methods.DELETE);
             if(!(get||post||delete)){respond(e,405,Map.of("error","method_not_allowed","message","Unsupported method"));return;}
-            String ip=e.getSourceAddress().getAddress().getHostAddress();if(!rate.allow(ip+(path.startsWith("/api/")?":http":":assets"),path.startsWith("/api/")?300:5000,60000))throw new TooMany();
+            String ip=e.getSourceAddress().getAddress().getHostAddress();boolean mapImage=path.equals("/api/map/images/tile");if(!rate.allow(ip+(mapImage?":map-image":path.startsWith("/api/")?":http":":assets"),mapImage?2400:path.startsWith("/api/")?300:5000,60000))throw new TooMany();
             if(!path.startsWith("/api/")){if(!get)throw new IllegalArgumentException("Invalid path");staticFile(e,path);return;}
             e.getResponseHeaders().put(Headers.CACHE_CONTROL,"no-store");Auth.Session s=session(e);
             if(get&&path.equals("/api/auth/status")){respond(e,200,auth.status(s));return;}
             if(post&&(path.equals("/api/auth/setup")||path.equals("/api/auth/login"))){
                 if(!rate.allow(ip+":login",8,60000))throw new TooMany();Map<String,Object> body=body(e);
                 String name=Json.text(body,"username",""),password=Json.text(body,"password","");
-                Auth.Session newSession=path.endsWith("setup")?auth.setup(Json.text(body,"token",""),name,password,e.getSourceAddress().getAddress().isLoopbackAddress()):auth.login(name,password);
+                Auth.Session newSession=path.endsWith("setup")?auth.setup(Json.text(body,"token",""),name,password,e.getSourceAddress().getAddress().isLoopbackAddress()):auth.login(name,password,localDefaultMode&&e.getSourceAddress().getAddress().isLoopbackAddress());
                 cookie(e,newSession.id(),28800);db.audit(name,"auth.login","ok",Map.of("source",ip));respond(e,200,auth.status(newSession));return;
             }
             if(s==null){respond(e,401,Map.of("error","unauthorized","message","Sign in first"));return;}
-            if(retiredMapEndpoint(path)){respond(e,410,Map.of("error","feature_removed","message","Карта доступна только для просмотра; строительство удалено"));return;}
+            if(s.defaultPassword()&&!(localDefaultMode&&e.getSourceAddress().getAddress().isLoopbackAddress()))throw new SecurityException("Change the initial password locally before remote access");
+            if(retiredMapEndpoint(path)){respond(e,410,Map.of("error","feature_removed","message","Карта доступна через постоянные PNG-тайлы; прежние маршруты и строительство удалены"));return;}
             if(!get&&!Auth.constant(e.getRequestHeaders().getFirst(CSRF),s.csrf()))throw new SecurityException("CSRF token is missing or invalid");
+            if(get&&path.equals("/api/map/images/tile")){
+                mapEnabled();active(s);SavedImageMap.Tile image=game.mapImageTile(query(e,"world",""),Integer.parseInt(query(e,"level","0")),Integer.parseInt(query(e,"x","0")),Integer.parseInt(query(e,"y","0")));
+                e.getResponseHeaders().put(Headers.CACHE_CONTROL,"private, max-age=60, must-revalidate");
+                if(image==null){e.setStatusCode(404);e.endExchange();return;}
+                e.getResponseHeaders().put(Headers.ETAG,image.etag());
+                String condition=e.getRequestHeaders().getFirst(Headers.IF_NONE_MATCH);if(condition!=null&&Arrays.stream(condition.split(",")).map(String::trim).anyMatch(tag->(tag.startsWith("W/")?tag.substring(2):tag).equals(image.etag())||tag.equals("*"))){e.setStatusCode(304);e.endExchange();return;}
+                e.getResponseHeaders().put(Headers.CONTENT_TYPE,"image/png");e.getResponseHeaders().put(Headers.CONTENT_LENGTH,String.valueOf(image.png().length));e.setStatusCode(200);e.getOutputStream().write(image.png());return;
+            }
             if(post&&path.equals("/api/plugins/stage")){owner(s);String filename=e.getRequestHeaders().getFirst(new HttpString("X-MCC-Filename"));if(filename==null)throw new IllegalArgumentException("X-MCC-Filename is required");Object staged=plugin.pluginStage().upload(filename,e.getInputStream());db.audit(s.name(),"plugins.stage","ok",Map.of("file",filename));respond(e,200,staged);return;}
             if(post&&path.equals("/api/auth/logout")){auth.logout(s);cookie(e,"",0);respond(e,200,Map.of("ok",true));return;}
             if(post&&path.equals("/api/auth/account")){
@@ -75,7 +86,8 @@ public final class WebServer implements AutoCloseable {
             }
             Object response;
             if(get){response=get(path,e,s);}else if(post){response=post(path,body(e),s);}else{
-                admin(s);if(path.startsWith("/api/automations/")){plugin.automation().delete(path.substring("/api/automations/".length()));db.audit(s.name(),"automation.delete","ok",Map.of());response=Map.of("ok",true);}else throw new IllegalArgumentException("Unknown endpoint");
+                if(path.startsWith("/api/users/")){owner(s);String name=path.substring("/api/users/".length());auth.deleteUser(s,name);db.audit(s.name(),"users.delete","ok",Map.of("username",name)).get();response=Map.of("ok",true);}
+                else {admin(s);if(path.startsWith("/api/automations/")){plugin.automation().delete(path.substring("/api/automations/".length()));db.audit(s.name(),"automation.delete","ok",Map.of());response=Map.of("ok",true);}else throw new IllegalArgumentException("Unknown endpoint");}
             }
             respond(e,response instanceof Map<?,?> map&&Boolean.TRUE.equals(map.get("pending"))?202:200,response);
         }catch(TooMany ex){e.getResponseHeaders().put(Headers.RETRY_AFTER,"60");respond(e,429,Map.of("error","rate_limit","message","Too many requests; retry shortly"));}
@@ -91,12 +103,14 @@ public final class WebServer implements AutoCloseable {
             case "/api/players" -> main.await(game::players);
             case "/api/worlds" -> {List<Map<String,Object>> worlds=main.await(game::worlds);if(!Set.of("Owner","Admin").contains(s.role())){List<Map<String,Object>> filtered=new ArrayList<>();for(Map<String,Object> w:worlds){Map<String,Object> c=new LinkedHashMap<>(w);c.remove("seed");filtered.add(c);}yield filtered;}yield worlds;}
             case "/api/catalogs" -> main.await(game::catalogs);
-            case "/api/map/terrain" -> {mapEnabled();if(!rate.allow(s.name()+":map-terrain",90,60000))throw new TooMany();String world=query(e,"world","");int cx=Integer.parseInt(query(e,"cx","0")),cz=Integer.parseInt(query(e,"cz","0")),radius=Integer.parseInt(query(e,"radius","2")),step=Integer.parseInt(query(e,"step","1"));yield main.await(()->{active(s);return game.mapTerrain(world,cx,cz,radius,step);});}
-            case "/api/map/index" -> {mapEnabled();if(!rate.allow(s.name()+":map-index",10,60000))throw new TooMany();String world=query(e,"world","");yield main.await(()->{active(s);return game.mapIndex(world);}).get(15,TimeUnit.SECONDS);}
+            case "/api/map/images" -> {mapEnabled();active(s);yield game.mapImages(query(e,"world",""));}
+            case "/api/map/players" -> {mapEnabled();active(s);yield main.await(()->{active(s);return game.mapPlayers(query(e,"world",""));});}
             case "/api/punishments" -> {moderator(s);String uuid=query(e,"uuid","");yield plugin.punishments().list(uuid.isBlank()?null:dev.mcc.game.PunishmentEngine.uuid(uuid),Integer.parseInt(query(e,"limit","100"))).get();}
-            case "/api/map" -> {if(!plugin.module("map"))throw new IllegalStateException("Map module is disabled; enable it in MCC settings");String world=query(e,"world","");int x=Integer.parseInt(query(e,"x","0")),z=Integer.parseInt(query(e,"z","0"));if(Math.abs((long)x)>29999800||Math.abs((long)z)>29999800)throw new IllegalArgumentException("Map coordinates out of bounds");yield main.await(()->game.mapTile(world,x,z,64)).get(25,TimeUnit.SECONDS);}
             case "/api/plugins" -> {admin(s);yield main.await(game::plugins);}
             case "/api/plugins/staged" -> {owner(s);yield plugin.pluginStage().list();}
+            case "/api/plugins/catalog" -> {admin(s);active(s);if(!rate.allow(s.name()+":plugin-catalog",30,60000))throw new TooMany();yield plugin.pluginCatalog().search(query(e,"query",""),query(e,"sort","downloads"),Integer.parseInt(query(e,"offset","0")),Integer.parseInt(query(e,"limit","20")),Boolean.parseBoolean(query(e,"compatible","true")),Boolean.parseBoolean(query(e,"featured","false"))).get(18,TimeUnit.SECONDS);}
+            case "/api/plugins/catalog/plan" -> {owner(s);active(s);if(!rate.allow(s.name()+":plugin-plan",12,60000))throw new TooMany();yield plugin.pluginCatalog().plan(query(e,"projectId",""),s.name()).get(18,TimeUnit.SECONDS);}
+            case "/api/plugins/catalog/installed" -> {admin(s);active(s);yield plugin.pluginCatalog().installedCatalog().get(10,TimeUnit.SECONDS);}
             case "/api/events" -> main.await(game::activeEvents);
             case "/api/entities" -> {if(!rate.allow(s.name()+":entities",30,60000))throw new TooMany();Map<String,Object> params=new LinkedHashMap<>();params.put("world",query(e,"world",""));for(String coordinate:List.of("x","y","z"))params.put(coordinate,Double.parseDouble(query(e,coordinate,"0")));params.put("radius",Double.parseDouble(query(e,"radius","16")));yield main.await(()->game.entities(params));}
             case "/api/audit" -> {moderator(s);yield db.auditHistory().get();}
@@ -122,7 +136,8 @@ public final class WebServer implements AutoCloseable {
             case "/api/automations" -> {admin(s);active(s);Map<String,Object> saved=plugin.automation().save(body,s.name(),s.role());db.audit(s.name(),"automation.save","ok",Map.of("id",saved.get("id")));yield saved;}
             case "/api/backups" -> {owner(s);if(plugin.backup().list().size()>=20)throw new IllegalStateException("Backup limit reached; archive old backups offline");Object backup=plugin.backup().create();db.audit(s.name(),"backup.create","ok",Map.of("scope","MCC data"));yield backup;}
             case "/api/settings" -> {admin(s);Object result=plugin.updateSettings(body);db.audit(s.name(),"settings.update","ok",Map.of());yield result;}
-            case "/api/users" -> {owner(s);String name=Json.text(body,"username","");auth.createUser(name,Json.text(body,"password",""),Json.text(body,"role","Viewer"));db.audit(s.name(),"users.create","ok",Map.of("username",name,"role",Json.text(body,"role","Viewer")));yield Map.of("ok",true);}
+            case "/api/users" -> {owner(s);String name=Json.text(body,"username","");auth.createUser(s,name,Json.text(body,"password",""),Json.text(body,"role","Viewer"));db.audit(s.name(),"users.create","ok",Map.of("username",name,"role",Json.text(body,"role","Viewer")));yield Map.of("ok",true);}
+            case "/api/plugins/catalog/install" -> {owner(s);active(s);if(!Boolean.TRUE.equals(body.get("confirmed")))throw new IllegalArgumentException("Explicit confirmation required");yield tracked("plugins.catalog.install",body,s,()->{active(s);if(!rate.allow(s.name()+":plugin-install",5,60000))throw new TooMany();return plugin.pluginCatalog().install(Json.text(body,"planId",""),s.name(),()->auth.session(s.id())==s&&s.role().equals("Owner")).thenApply(value->value);});}
             default -> {
                 if(path.startsWith("/api/automations/")&&path.endsWith("/run")){
                     admin(s);active(s);String ruleId=path.substring("/api/automations/".length(),path.length()-"/run".length());UUID.fromString(ruleId);
@@ -170,7 +185,7 @@ public final class WebServer implements AutoCloseable {
         requests.keySet().removeIf(key->key.startsWith(session.name()+":")||key.startsWith(destination+":"));return changed;
     }
     /** A stale editor client cannot reach any world mutation or chunk-detail worker. */
-    static boolean retiredMapEndpoint(String path){return path.equals("/api/build")||path.startsWith("/api/build/")||path.equals("/api/map/detail")||path.equals("/api/map/region");}
+    static boolean retiredMapEndpoint(String path){return path.equals("/api/build")||path.startsWith("/api/build/")||Set.of("/api/map","/api/map/terrain","/api/map/index","/api/map/detail","/api/map/region").contains(path);}
     private Map<String,Object> punishmentBody(Map<String,Object> body)throws Exception{
         Map<String,Object> values=new LinkedHashMap<>(body);if(!values.containsKey("uuid")&&values.get("player") instanceof String id)values.put("uuid",id);if(!values.containsKey("seconds")&&values.containsKey("durationSeconds"))values.put("seconds",values.get("durationSeconds"));
         String uuid=Json.text(values,"uuid","");dev.mcc.game.PunishmentEngine.uuid(uuid);
