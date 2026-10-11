@@ -36,7 +36,7 @@ The durable history can record a failed request or a pending native reconciliati
 
 The whole Java source compiled against the pinned Spigot API during the targeted Gradle run. `OreLedgerTest` passed 10 tests; `PunishmentTest` passed 13, including provider activation, fail-closed behavior, retained histories and queued shutdown; `ServerPlatformTest` passed 4, covering exact version parsing, unavailable metrics, scheduler pauses, warm-up and immutable sample copies. Failures, errors and skipped tests were all zero. Three ore-view Node tests and TypeScript `--noEmit` also passed.
 
-`GameRulesTest` passed three class/interface dispatch and typed rejection regressions. A standalone, non-server probe bound the public methods using both exact Spigot snapshot and actual Paper 26.3 build 169 API JARs. It did not initialize a server, change a world or replace the required new-JAR native world/API smoke. The subsequent complete Java test XML records 195 tests with zero failures, errors and skips.
+`GameRulesTest` passed three class/interface dispatch and typed rejection regressions. A standalone, non-server probe bound the public methods using both exact Spigot snapshot and actual Paper 26.3 build 169 API JARs. It did not initialize a server, change a world or replace the required new-JAR native world/API smoke. The subsequent complete Java test XML records 205 tests with zero failures, errors and skips.
 
 These checks do not replace native Paper/Spigot startup, command/action smoke tests, listener event tests or browser visual inspection. Final assembled release checks are recorded separately.
 
