@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.StreamReadConstraints;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.StreamReadFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.core.type.TypeReference;
 import java.util.Map;
 
@@ -11,7 +12,8 @@ public final class Json {
     public static final ObjectMapper MAPPER = new ObjectMapper(JsonFactory.builder()
         .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
         .streamReadConstraints(StreamReadConstraints.builder().maxNestingDepth(24)
-        .maxStringLength(32768).maxNumberLength(100).build()).build());
+        .maxStringLength(32768).maxNumberLength(100).build()).build())
+        .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private Json() {}
     public static String write(Object value) {
         try { return MAPPER.writeValueAsString(value); }

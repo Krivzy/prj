@@ -38,3 +38,26 @@ test('Tracked operations propagate authorization failure and do not poll',async(
   let calls=0;const env=sandbox(async()=>{calls++;return response({message:'Owner required'},403);});
   try{await assert.rejects(postTracked('/api/build/actions',{confirmed:true}),error=>error instanceof ApiError&&error.status===403);assert.equal(calls,1);}finally{env.restore();}
 });
+test('Map caller signal keeps the request timeout and does not abort the caller',async()=>{
+  let timeout,usedSignal,cleared=false;
+  const env=sandbox((_path,{signal})=>{usedSignal=signal;return new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));});
+  globalThis.window.setTimeout=callback=>{timeout=callback;return 1;};
+  globalThis.window.clearTimeout=()=>{cleared=true;};
+  const caller=new AbortController();
+  try{const pending=request('/api/map/images',{signal:caller.signal});timeout();await assert.rejects(pending,/Request timed out/);assert.equal(usedSignal.aborted,true);assert.equal(caller.signal.aborted,false);assert.equal(cleared,true);}finally{env.restore();}
+});
+test('Caller cancellation reaches fetch even with a custom abort reason',async()=>{
+  let usedSignal;
+  const env=sandbox((_path,{signal})=>{usedSignal=signal;return new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));});
+  const caller=new AbortController();
+  try{const pending=request('/api/map/players',{signal:caller.signal});caller.abort(new Error('Caller cancelled'));await assert.rejects(pending,/Request timed out/);assert.equal(usedSignal.aborted,true);}finally{env.restore();}
+});
+test('An already cancelled caller reaches fetch as cancelled and successful requests remove its listener',async()=>{
+  const cancelled=new AbortController();cancelled.abort();let usedSignal;
+  const env=sandbox(async(_path,{signal})=>{usedSignal=signal;if(signal.aborted)throw signal.reason;return response({ok:true});});
+  try{await assert.rejects(request('/api/map/images',{signal:cancelled.signal}),/Request timed out/);assert.equal(usedSignal.aborted,true);
+    const caller=new AbortController(),original=caller.signal.removeEventListener.bind(caller.signal);let removed=0;
+    caller.signal.removeEventListener=(...args)=>{if(args[0]==='abort')removed++;original(...args);};
+    assert.deepEqual(await request('/api/state',{signal:caller.signal}),{ok:true});assert.equal(removed,1);caller.abort();assert.equal(usedSignal.aborted,false);
+  }finally{env.restore();}
+});

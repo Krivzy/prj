@@ -17,7 +17,7 @@ class ModulePolicyTest {
     }
     @Test void disabledWorkCannotBeReachedThroughReadRoutesOrActionsButCoreCleanupRemains(){
         for(String path:List.of("/api/players","/api/players/uuid/inventory","/api/map/images/tile","/api/plugins/catalog/install","/api/plugins/manage","/api/plugins/remove/plan","/api/plugins/remove","/api/plugins/restore","/api/integrations/advancedban/query","/api/ore-monitor/history","/api/metrics","/api/automations/profiles","/api/entities"))assertThrows(IllegalStateException.class,()->ModulePolicy.require(ModulePolicy.routeModule(path),key->false));
-        for(String action:List.of("player.heal","inventory.set","mob.spawn","event.start","console.command"))assertThrows(IllegalStateException.class,()->ModulePolicy.require(ModulePolicy.actionModule(action),key->false));
+        for(String action:List.of("player.heal","players.heal_all","inventory.set","mob.spawn","event.start","console.command"))assertThrows(IllegalStateException.class,()->ModulePolicy.require(ModulePolicy.actionModule(action),key->false));
         for(String path:List.of("/api/auth/login","/api/server/health","/api/settings","/api/server/profiles/apply","/api/backups","/api/punishments/provider"))assertDoesNotThrow(()->ModulePolicy.require(ModulePolicy.routeModule(path),key->false));assertDoesNotThrow(()->ModulePolicy.require(ModulePolicy.actionModule("event.stop"),key->false));
     }
     @Test void cachedSnapshotIsScrubbedWithoutMutatingPreviousOrLosingHealth(){

@@ -1,7 +1,7 @@
 import {useSyncExternalStore} from 'react';
 import {request} from './api';
 import type {LicenseState,Player, Snapshot, StreamEntry} from './types';
-import {effectiveModules,licenseAllowsTopic} from './license-view';
+import {effectiveModules,licenseAllowsTopic,snapshotLicense} from './license-view';
 import {moduleEnabled,requestedTopics,topicEnabled} from './module-view';
 import type {ModuleFlags} from './module-view';
 import {mergeEntries} from './policy';
@@ -10,6 +10,16 @@ type LiveState = {snapshot: Snapshot | null; players: Player[]; status: 'connect
 let state: LiveState = {snapshot: null, players: [], status: 'connecting', sequence: 0, error: '', chat: [], console: [], timeline: [], updated: 0};
 let modules:ModuleFlags={},moduleEpoch=0,license:LicenseState|undefined;
 function scrubModules(next:ModuleFlags){if(Object.keys(next).length!==Object.keys(modules).length||Object.keys(next).some(key=>next[key]!==modules[key]))moduleEpoch++;modules={...next};const patch:Partial<LiveState>={};if(!moduleEnabled(next,'chat'))patch.chat=[];if(!moduleEnabled(next,'console'))patch.console=[];if(!moduleEnabled(next,'timeline'))patch.timeline=[];if(!moduleEnabled(next,'playerSnapshots'))patch.players=[];return patch;}
+function olderSnapshot(next:Snapshot){
+  if(!state.snapshot)return false;
+  const currentStamp=new Date(state.snapshot.timestamp).getTime(),nextStamp=new Date(next.timestamp).getTime();
+  return Number.isFinite(currentStamp)&&Number.isFinite(nextStamp)&&nextStamp<currentStamp;
+}
+function snapshotPolicy(next:Snapshot){
+  const access=snapshotLicense(next.license);
+  if(access&&JSON.stringify(access)!==JSON.stringify(license)){license=access;moduleEpoch++;}
+  return scrubModules(effectiveModules((next.modules as ModuleFlags|undefined)??{},license));
+}
 const listeners = new Set<() => void>();
 const emit = (next: Partial<LiveState>) => {state = {...state, ...next}; listeners.forEach(fn => fn());};
 export const getLiveState = () => state;
@@ -21,11 +31,9 @@ export async function refreshLive() {
   if(startedEpoch!==moduleEpoch)return;
   const patch: Partial<LiveState> = {updated: Date.now()};
   if (responses[0].status === 'fulfilled') {
-    const currentStamp = state.snapshot ? new Date(state.snapshot.timestamp).getTime() : 0;
-    const nextStamp = new Date(responses[0].value.timestamp).getTime();
-    if (state.snapshot && Number.isFinite(currentStamp) && Number.isFinite(nextStamp) && nextStamp < currentStamp)return;
+    if(olderSnapshot(responses[0].value))return;
     patch.snapshot = responses[0].value;
-    Object.assign(patch,scrubModules(effectiveModules((responses[0].value.modules as ModuleFlags|undefined)??{},license)));
+    Object.assign(patch,snapshotPolicy(responses[0].value));
     patch.error = '';
   }
   else patch.error = responses[0].reason instanceof Error ? responses[0].reason.message : 'Не удалось получить данные';
@@ -42,11 +50,13 @@ export function connectLive(role = 'viewer',access?:LicenseState) {
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   let lastPong = Date.now();
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
-  let connectionEpoch=0;
-  function subscribe(){if(ws?.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:'subscribe',topics:requestedTopics(role,modules).filter(topic=>licenseAllowsTopic(license,topic))}));}
+  let connectionEpoch=0,subscribedEpoch=-1;
+  function subscribe(){if(ws?.readyState===WebSocket.OPEN&&subscribedEpoch!==moduleEpoch){subscribedEpoch=moduleEpoch;ws.send(JSON.stringify({type:'subscribe',topics:requestedTopics(role,modules).filter(topic=>licenseAllowsTopic(license,topic))}));}}
+  // HTTP and websocket snapshots both change policy. Resubscribe once per accepted transition.
+  listeners.add(subscribe);
   function connect() {
     if (stopped) return;
-    const generation=++connectionEpoch;
+    const generation=++connectionEpoch;subscribedEpoch=-1;
     emit({status: 'connecting'});
     ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
     ws.onopen = () => {
@@ -67,7 +77,7 @@ export function connectLive(role = 'viewer',access?:LicenseState) {
       if (msg.type !== 'event' || !msg.topic||!topicEnabled(modules,msg.topic)||!licenseAllowsTopic(license,msg.topic)) return;
       if (typeof msg.sequence === 'number' && msg.sequence <= state.sequence) return;
       const patch: Partial<LiveState> = {sequence: msg.sequence ?? state.sequence, updated: Date.now()};
-      if (msg.topic === 'state' && msg.data && typeof msg.data === 'object'){patch.snapshot=msg.data as Snapshot;const next=effectiveModules((patch.snapshot.modules as ModuleFlags|undefined)??{},license);const epoch=moduleEpoch;Object.assign(patch,scrubModules(next));if(epoch!==moduleEpoch)subscribe();}
+      if (msg.topic === 'state' && msg.data && typeof msg.data === 'object'){patch.snapshot=msg.data as Snapshot;if(olderSnapshot(patch.snapshot))return;const epoch=moduleEpoch;Object.assign(patch,snapshotPolicy(patch.snapshot));if(epoch!==moduleEpoch)subscribe();}
       if (msg.topic === 'players' && Array.isArray(msg.data)) patch.players = msg.data as Player[];
       if (['chat', 'console', 'timeline'].includes(msg.topic)) {
         const topic = msg.topic as 'chat' | 'console' | 'timeline';
@@ -89,5 +99,5 @@ export function connectLive(role = 'viewer',access?:LicenseState) {
     ws.onerror = () => ws?.close();
   }
   connect();
-  return () => {stopped = true; clearTimeout(retry); clearTimeout(refreshTimer); clearInterval(heartbeat);if(ws){ws.onopen=null;ws.onclose=null;ws.onmessage=null;ws.onerror=null;ws.close();}};
+  return () => {stopped = true;listeners.delete(subscribe); clearTimeout(retry); clearTimeout(refreshTimer); clearInterval(heartbeat);if(ws){ws.onopen=null;ws.onclose=null;ws.onmessage=null;ws.onerror=null;ws.close();}};
 }

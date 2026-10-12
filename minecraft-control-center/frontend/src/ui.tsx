@@ -4,6 +4,7 @@ import {useApp} from './context';
 import type {Catalogs, Item} from './types';
 import {canExecute} from './policy';
 import {licenseAllowsAction} from './license-view';
+import {actionEnabled} from './module-view';
 import {GameImage,useAssetName,useAssets,assetName} from './assets';
 import WorkbenchScene from './WorkbenchScene';
 import {CatalogPicker,CatalogInput} from './Catalog';
@@ -76,7 +77,7 @@ export function AsyncButton({run, children, className = '', disabled = false}: {
   const [busy, setBusy] = useState(false); const {notify} = useApp();
   return <Button type="button" disabled={disabled || busy} className={className} aria-busy={busy} onClick={async () => {setBusy(true); try {await run();} catch(error) {notify(error instanceof Error ? error.message : String(error), true);} finally {setBusy(false);}}}>{busy ? <span className="spinner"/> : null}{children}</Button>;
 }
-export function ActionButton({action, params, danger, children, className = '', disabled = false}: {action: string; params: Record<string,unknown>; danger?: string; children: ReactNode; className?: string; disabled?: boolean}) {const app = useApp(); return <AsyncButton className={className} disabled={!canExecute(app.auth.user?.role??'Viewer',action)||!licenseAllowsAction(app.auth.license,action)||disabled} run={() => app.action(action,params,danger)}>{children}</AsyncButton>;}
+export function ActionButton({action, params, danger, children, className = '', disabled = false}: {action: string; params: Record<string,unknown>; danger?: string; children: ReactNode; className?: string; disabled?: boolean}) {const app = useApp(); return <AsyncButton className={className} disabled={!canExecute(app.auth.user?.role??'Viewer',action)||!licenseAllowsAction(app.auth.license,action)||!actionEnabled(app.modules,action)||disabled} run={() => app.action(action,params,danger)}>{children}</AsyncButton>;}
 export function Field({label, children, help}: {label: string; children: ReactNode; help?: string}) {const id=useId();const direct=isValidElement(children)&&typeof children.type==='string'&&['input','select','textarea'].includes(children.type);return <div className="field">{direct?<label htmlFor={id}>{label}</label>:<span>{label}</span>}{direct?cloneElement(children as React.ReactElement<{id?:string}>,{id}):children}{help&&<small>{help}</small>}</div>;}
 const modalStack:string[]=[];let restoreOverflow='';
 export function Modal({title, children, close, danger = false}: {title: string; children: ReactNode; close: () => void; danger?: boolean}) {

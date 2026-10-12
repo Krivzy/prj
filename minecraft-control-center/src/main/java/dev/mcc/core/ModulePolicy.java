@@ -34,7 +34,7 @@ public final class ModulePolicy {
         if(action.startsWith("event."))return "events";
         if(action.startsWith("chat."))return "chat";
         if(action.startsWith("mob."))return "entitySnapshots";
-        if(action.startsWith("player.")||action.startsWith("inventory."))return "playerSnapshots";
+        if(action.startsWith("player.")||action.startsWith("players.")||action.startsWith("inventory."))return "playerSnapshots";
         return action.equals("console.command")?"console":"";
     }
     public static String topicModule(String topic){

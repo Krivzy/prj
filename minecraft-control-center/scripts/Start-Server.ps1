@@ -2,7 +2,10 @@ param(
     [string]$JavaHome = $env:JAVA_HOME,
     [string]$ServerDirectory = (Join-Path $PSScriptRoot '..\server'),
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\.jar$')][string]$ServerJar = 'paper.jar',
-    [ValidateRange(512, 32768)][int]$MemoryMiB = 2048
+    [ValidateRange(512, 32768)][int]$MemoryMiB = 2048,
+    [ValidateSet('Paper', 'Purpur', 'MCCCore', 'Spigot', 'Bukkit')][string]$KernelName = 'Paper',
+    [ValidatePattern('^[A-Za-z0-9_.-]{1,32}$')][string]$MinecraftVersion = '26.3',
+    [switch]$Direct
 )
 $ErrorActionPreference = 'Stop'
 $serverPath = [IO.Path]::GetFullPath($ServerDirectory)
@@ -14,6 +17,7 @@ if (!(Test-Path -LiteralPath $eulaPath) -or !(Select-String -LiteralPath $eulaPa
 }
 $javaExecutable = if ($JavaHome) { Join-Path $JavaHome 'bin\java.exe' } else { 'java.exe' }
 if (!(Get-Command $javaExecutable -ErrorAction SilentlyContinue)) { throw 'Java is missing. Install a Java 25 JDK and set JAVA_HOME.' }
+$javaExecutable = (Get-Command $javaExecutable -CommandType Application -ErrorAction Stop).Source
 $previousErrorAction = $ErrorActionPreference
 try {
     $ErrorActionPreference = 'Continue'
@@ -24,6 +28,16 @@ if ($javaVersionExitCode -ne 0) { throw 'Java version check failed.' }
 if ($javaVersion -notmatch 'version "(?<major>\d+)') { throw 'Cannot determine Java version.' }
 if ([int]$Matches.major -lt 25) { throw 'Paper 26.3 and MCC Core require Java 25 or newer.' }
 Push-Location -LiteralPath $serverPath
-try { & $javaExecutable '-Xms512M' "-Xmx${MemoryMiB}M" "-Dmcc.launcher.server-jar=$ServerJar" '-jar' $ServerJar '--nogui' }
+try {
+    if ($Direct) {
+        & $javaExecutable '-Xms512M' "-Xmx${MemoryMiB}M" "-Dmcc.launcher.server-jar=$ServerJar" '-jar' $ServerJar '--nogui'
+    } else {
+        $pluginJar = Join-Path $serverPath 'plugins\MinecraftControlCenter.jar'
+        if (!(Test-Path -LiteralPath $pluginJar -PathType Leaf) -or ((Get-Item -LiteralPath $pluginJar).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'Install MinecraftControlCenter.jar in plugins first, or use -Direct for hosting-managed startup.'
+        }
+        & $javaExecutable '-Xms32M' '-Xmx96M' '-jar' $pluginJar '--server-root' $serverPath '--server-jar' $ServerJar '--java' $javaExecutable '--memory-mib' $MemoryMiB '--kernel-name' $KernelName '--minecraft-version' $MinecraftVersion
+    }
+}
 finally { Pop-Location }
 exit $LASTEXITCODE

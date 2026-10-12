@@ -5,7 +5,7 @@ import {ApiError, execute, post, request, setAuth} from './api';
 import {AppContext,useResource} from './context';
 import type {Page} from './context';
 import {connectLive, refreshLive, resetLive, useLive} from './live';
-import {pageEnabled} from './module-view';
+import {actionEnabled,pageEnabled} from './module-view';
 import type {Auth,Settings} from './types';
 import {Button, Icon, Loading, Modal} from './ui';
 import {GameImage} from './assets';
@@ -16,7 +16,7 @@ import Login from './Login';
 import Account from './Account';
 import Dashboard from './Dashboard';
 import {RestartScreen,useServerRestart} from './ServerRestart';
-import {effectiveModules,licenseAllowsAction,licenseAllowsPage} from './license-view';
+import {authWithSnapshotLicense,effectiveModules,licenseAllowsAction,licenseAllowsPage} from './license-view';
 import {watchSetupLink} from './setup-view';
 const Management = lazy(() => import('./Management'));
 const SetupWizard=lazy(()=>import('./SetupWizard'));
@@ -41,6 +41,8 @@ export default function App() {
   const reduce = useReducedMotion();
   const restarting=useServerRestart();
   const settings=useResource<Settings>(auth?.authenticated?'/api/settings':null);
+  const liveLicense=live.snapshot?.license;
+  useEffect(()=>{setAuthState(current=>authWithSnapshotLicense(current,liveLicense));},[liveLicense]);
   const modules=effectiveModules((live.snapshot?.modules as Record<string,boolean>|undefined)??settings.data?.modules??{},auth?.license);
   const integrations=useResource<{items:{id:string}[]}>(auth?.authenticated&&modules.integrations!==false&&['Owner','Admin'].includes(auth.user?.role??'')?'/api/integrations':null);
   const integrationIds=integrations.data?.items.map(item=>item.id)??[];
@@ -98,6 +100,7 @@ export default function App() {
   async function action(name:string,params:Record<string,unknown>,danger?:string) {
     if (!canExecute(auth?.user?.role ?? 'Viewer',name)) throw new Error(t('Недостаточно прав','Permission denied'));
     if(!licenseAllowsAction(auth?.license,name))throw new Error(t('Эта функция доступна в полной версии. Открой настройки, чтобы изменить режим доступа.','This feature requires full access. Open settings to change access mode.'));
+    if(!actionEnabled(modules,name))throw new Error(t('Модуль отключён. Включи его в настройках панели.','Module disabled. Enable it in panel settings.'));
     let confirmed = false;
     if (danger) {confirmed = await confirm(danger); if (!confirmed) return null;}
     try {

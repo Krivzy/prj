@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {moduleEnabled,pageEnabled,requestedTopics,topicEnabled,imageMapWork} from '../src/module-view.ts';
+import {actionEnabled,moduleEnabled,pageEnabled,requestedTopics,topicEnabled,imageMapWork} from '../src/module-view.ts';
 import {availablePages} from '../src/navigation.ts';
 test('Disabled subsystems remove their pages and live subscriptions while keeping settings and core safety',()=>{
   const off={playerSnapshots:false,entitySnapshots:false,events:false,oreMonitor:false,integrations:false,chat:false,console:false,automations:false,timeline:false,map:false};
@@ -14,4 +14,9 @@ test('Player snapshots control map markers independently from the saved basemap'
   assert.deepEqual(imageMapWork({map:true,playerSnapshots:false}),{base:true,players:false});
   assert.deepEqual(imageMapWork({map:false,playerSnapshots:true}),{base:false,players:false});
   assert.deepEqual(imageMapWork({}),{base:true,players:true});
+});
+test('Player module blocks plural mass actions and inventory while core actions remain available',()=>{
+  for(const action of ['player.heal','players.heal_all','inventory.set'])assert.equal(actionEnabled({playerSnapshots:false},action),false);
+  for(const action of ['world.save','server.settings','event.stop'])assert.equal(actionEnabled({playerSnapshots:false,events:false},action),true);
+  assert.equal(actionEnabled({playerSnapshots:true},'players.heal_all'),true);
 });

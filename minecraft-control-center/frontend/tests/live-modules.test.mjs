@@ -45,3 +45,47 @@ test('Trial connection subscribes only overview/chat/console and never fetches o
     socket.onmessage({data:JSON.stringify({type:'event',topic:'players',sequence:1,data:[{name:'must-not-appear'}]})});assert.deepEqual(getLiveState().players,[]);
   }finally{close();resetLive();}
 });
+const access=full=>({mode:full?'temporary-full':'trial',fullAccess:full,keyActivationAvailable:false,allowedFeatures:full?['overview','players','console','chat','settings']:['overview','console','chat','settings'],lockedFeatures:full?[]:['players']});
+const licensedSnapshot=(at,full)=>({...snapshot(at,{playerSnapshots:true,chat:true,console:true,timeline:true}),license:access(full)});
+test('An accepted remote upgrade unlocks live topics and players without a local license event',async()=>{
+  resetLive();let socket;const messages=[],calls=[];
+  globalThis.WebSocket=class {static OPEN=1;readyState=1;constructor(){socket=this;}send(value){messages.push(JSON.parse(value));}close(){this.readyState=3;}};
+  globalThis.fetch=async path=>{calls.push(path);return response(path==='/api/state'?licensedSnapshot(100,false):[]);};
+  const close=connectLive('owner',access(false));
+  try{socket.onopen();await turn();await turn();assert.equal(calls.includes('/api/players'),false);
+    socket.onmessage({data:JSON.stringify({type:'event',topic:'state',sequence:1,data:licensedSnapshot(200,true)})});
+    assert.equal(messages.at(-1).topics.includes('players'),true);
+    socket.onmessage({data:JSON.stringify({type:'event',topic:'players',sequence:2,data:[{uuid:'new-player'}]})});assert.deepEqual(getLiveState().players,[{uuid:'new-player'}]);assert.equal(getLiveState().snapshot.license.mode,'temporary-full');
+  }finally{close();resetLive();}
+});
+test('A remote downgrade scrubs premium data and rejects a full HTTP request started before it',async()=>{
+  resetLive();let socket,n=0;const stale=deferred(),messages=[];
+  globalThis.WebSocket=class {static OPEN=1;readyState=1;constructor(){socket=this;}send(value){messages.push(JSON.parse(value));}close(){this.readyState=3;}};
+  globalThis.fetch=async path=>path==='/api/state'?(++n===1?response(licensedSnapshot(100,true)):stale.promise):response([]);
+  const close=connectLive('owner',access(true));
+  try{socket.onopen();await turn();await turn();socket.onmessage({data:JSON.stringify({type:'event',topic:'players',sequence:1,data:[{uuid:'old-player'}]})});
+    const pending=refreshLive();socket.onmessage({data:JSON.stringify({type:'event',topic:'state',sequence:2,data:licensedSnapshot(200,false)})});
+    assert.deepEqual(getLiveState().players,[]);assert.deepEqual(messages.at(-1).topics,['state','chat','console']);
+    stale.resolve(response(licensedSnapshot(300,true)));await pending;assert.equal(getLiveState().snapshot.license.mode,'trial');
+    socket.onmessage({data:JSON.stringify({type:'event',topic:'players',sequence:3,data:[{uuid:'blocked-player'}]})});assert.deepEqual(getLiveState().players,[]);
+  }finally{close();resetLive();}
+});
+test('Older websocket snapshots cannot undo a newer accepted HTTP license',async()=>{
+  resetLive();let socket;const messages=[];
+  globalThis.WebSocket=class {static OPEN=1;readyState=1;constructor(){socket=this;}send(value){messages.push(JSON.parse(value));}close(){this.readyState=3;}};
+  globalThis.fetch=async path=>response(path==='/api/state'?licensedSnapshot(300,true):[]);
+  const close=connectLive('owner',access(false));
+  try{await refreshLive();socket.onmessage({data:JSON.stringify({type:'event',topic:'state',sequence:1,data:licensedSnapshot(100,false)})});
+    assert.equal(getLiveState().snapshot.license.mode,'temporary-full');
+    socket.onmessage({data:JSON.stringify({type:'event',topic:'players',sequence:2,data:[{uuid:'current-player'}]})});assert.deepEqual(getLiveState().players,[{uuid:'current-player'}]);
+  }finally{close();resetLive();}
+});
+test('An HTTP license transition resubscribes the existing connection once and cleanup removes the listener',async()=>{
+  resetLive();let socket,n=0;const messages=[];
+  globalThis.WebSocket=class {static OPEN=1;readyState=1;constructor(){socket=this;}send(value){messages.push(JSON.parse(value));}close(){this.readyState=3;}};
+  globalThis.fetch=async path=>response(path==='/api/state'?licensedSnapshot(++n*100,n>1):[]);
+  const close=connectLive('owner',access(false));
+  try{socket.onopen();await turn();await turn();const before=messages.length;await refreshLive();assert.equal(messages.length,before+1);assert.equal(messages.at(-1).topics.includes('players'),true);await refreshLive();assert.equal(messages.length,before+1);
+    close();const closedCount=messages.length;await refreshLive();assert.equal(messages.length,closedCount);
+  }finally{close();resetLive();}
+});

@@ -1,6 +1,7 @@
 package dev.mcc.server;
 
 import dev.mcc.core.Json;
+import dev.mcc.launcher.LauncherQueueWriter;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.*;
@@ -27,7 +28,7 @@ public final class RestartService {
     public String bootId(){return bootId;}
     public Map<String,Object> health(){return Map.of("ready",true,"bootId",bootId);}
     public synchronized Map<String,Object> status(){
-        String reason="";try{verifiedStatus();}catch(Exception e){reason="Для штатного перезапуска нужен подключённый MCC launcher v2. Обычная работа панели доступна.";}
+        String reason="";try{verifiedStatus();}catch(Exception e){reason="Для перезапуска запустите сервер через MinecraftControlCenter.jar или средствами хостинга. Панель продолжает работать.";}
         return Map.of("available",reason.isEmpty()&&acceptedId==null,"message",reason,"requested",acceptedId!=null,"bootId",bootId,"method","normal-stop-and-start","savesWorlds",true);
     }
     private void ordinary(Path p,boolean directory)throws Exception {
@@ -41,9 +42,9 @@ public final class RestartService {
         byte[] statusBytes;try(var stream=Files.newInputStream(file,LinkOption.NOFOLLOW_LINKS)){statusBytes=stream.readNBytes(16385);}
         if(statusBytes.length>16384)throw new IllegalStateException("Launcher status exceeds budget");
         Map<String,Object> s=Json.object(new String(statusBytes,java.nio.charset.StandardCharsets.UTF_8));
-        if(!(s.get("protocolVersion") instanceof Number version)||version.intValue()!=2||
-            !runId.equals(s.get("runId"))||!(s.get("javaPid") instanceof Number javaPid)||javaPid.longValue()!=pid||
-            !(s.get("daemonPid") instanceof Number daemonPid)||daemonPid.longValue()!=parent||!"running".equals(s.get("state"))||
+        if(!LauncherStatus.supported(s)||
+            !runId.equals(s.get("runId"))||!LauncherStatus.pidEquals(s.get("javaPid"),pid)||
+            !LauncherStatus.pidEquals(s.get("daemonPid"),parent)||!"running".equals(s.get("state"))||
             !Boolean.TRUE.equals(s.get("paperReady"))||!Boolean.TRUE.equals(s.get("dashboardReady")))throw new IllegalStateException("Launcher run is not ready or belongs to another process");
         return s;
     }
@@ -52,12 +53,13 @@ public final class RestartService {
         authority.run();
         if(acceptedId!=null){if(acceptedId.equals(id))return accepted();throw new IllegalStateException("Server restart is already requested");}
         verifiedStatus();Path queue=control.resolve("commands.ndjson");ordinary(queue,false);
+        Object queueIdentity=LauncherQueueWriter.identity(root,queue);
         if(Files.size(queue)>1024*1024)throw new IllegalStateException("Launcher command queue exceeds budget; archive offline");
         byte[] bytes=(Json.write(Map.of("command","restart","runId",runId,"requestId",id))+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
         try(FileChannel channel=FileChannel.open(queue,StandardOpenOption.WRITE,StandardOpenOption.APPEND,LinkOption.NOFOLLOW_LINKS);
-            var lock=channel.tryLock()){
-            if(lock==null)throw new IllegalStateException("Launcher queue is busy");
-            verifiedStatus();authority.run();if(channel.size()+bytes.length>1024*1024)throw new IllegalStateException("Launcher command queue exceeds budget");
+            var lock=LauncherQueueWriter.acquire(channel)){
+            verifiedStatus();authority.run();if(!queueIdentity.equals(LauncherQueueWriter.identity(root,queue)))throw new IllegalStateException("Launcher command queue identity changed");
+            if(channel.size()+bytes.length>1024*1024)throw new IllegalStateException("Launcher command queue exceeds budget");
             ByteBuffer data=ByteBuffer.wrap(bytes);while(data.hasRemaining())channel.write(data);channel.force(true);
         }
         acceptedId=id;return accepted();

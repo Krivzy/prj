@@ -1,5 +1,7 @@
 # Portable server supervisor
 
+> Legacy Python protocol 2. New installations use the Java launcher inside the same `MinecraftControlCenter.jar`: [one-JAR startup and migration](EMBEDDED-LAUNCHER.md). This legacy source is retained for compatibility, not required for the new distribution. Never run both launchers concurrently; stop the old launcher and its child before migrating.
+
 `scripts/Server-Supervisor.py` is a Python 3 launcher for a local Minecraft server. It supports normal stop, requested restart and limited recovery after an unexpected nonzero Java exit. The script is portable source; it is not installed automatically by the plugin. Replacing an existing production launcher requires a normal stop, verified backup and explicit deployment approval.
 
 ## Starting a managed server

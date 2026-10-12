@@ -31,7 +31,9 @@ public final class MccCoreInstaller {
         String reason="";Map<String,Object> plan=Map.of();
         try {verifyRuntime(root,serverFile);foundationResourceAvailable(plugin);plan=readPlan(data);}
         catch(Exception failure){reason="Переход доступен для Paper/Purpur 26.3 под MCC launcher, если сборка панели содержит проверенное ядро MCC Core. Текущее ядро продолжает работать.";}
-        result.put("available",reason.isEmpty());result.put("message",reason);result.put("pendingRestart","pending".equals(plan.get("state")));result.put("selection",plan.getOrDefault("state",MccCoreLink.active()?"installed":"keep"));
+        String selection=String.valueOf(plan.getOrDefault("state",MccCoreLink.active()?"installed":"keep"));
+        if("installed".equals(selection)&&!MccCoreLink.active())selection="keep";
+        result.put("available",reason.isEmpty());result.put("message",reason);result.put("pendingRestart","pending".equals(plan.get("state")));result.put("selection",selection);
         result.put("backupId",plan.getOrDefault("backupId",""));return Collections.unmodifiableMap(result);
     }
     /** Caller runs on an IO executor and rechecks its authenticated Owner authority throughout. */
@@ -67,7 +69,9 @@ public final class MccCoreInstaller {
         Path root=serverRoot.toRealPath(),data=pluginData.toAbsolutePath().normalize().resolve("mcc-core");
         if(!data.equals(root.resolve("plugins/MinecraftControlCenter/mcc-core")))throw new IOException("Invalid MCC Core offline scope");
         if(!Files.exists(data,LinkOption.NOFOLLOW_LINKS))return Map.of("selection","keep","changed",false);
-        checkPath(root,data,true);Map<String,Object> plan=readPlan(data);if(!"pending".equals(plan.get("state")))return Map.of("selection",plan.getOrDefault("state","keep"),"changed",false);
+        checkPath(root,data,true);Map<String,Object> plan=readPlan(data);
+        if("installed".equals(plan.get("state"))){filename(serverFile);return MccCoreRefresh.runOffline(root,pluginData,serverFile,plan);}
+        if(!"pending".equals(plan.get("state")))return Map.of("selection",plan.getOrDefault("state","keep"),"changed",false);
         filename(serverFile);if(!serverFile.equals(plan.get("serverFile")))throw new IOException("Pending MCC Core target does not match launcher target");
         verifyOffline(root);
         Path lease=pluginData.resolve("kernel-profiles/runtime.lock");checkPath(root,lease,false);
@@ -159,8 +163,8 @@ public final class MccCoreInstaller {
         filename(file);checkPath(root,root.resolve(file),false);if(!root.resolve(".mcc-launcher").toString().equals(System.getProperty("mcc.launcher.control","")))throw new IOException("An owned MCC launcher is required");
         Path status=root.resolve(".mcc-launcher/status.json");checkPath(root,status,false);Map<String,Object> s=boundedJson(status);
         long parent=ProcessHandle.current().parent().map(ProcessHandle::pid).orElse(-1L);
-        if(!(s.get("protocolVersion") instanceof Number version)||version.intValue()!=2||!System.getProperty("mcc.launcher.run-id","").equals(s.get("runId"))||
-            !(s.get("javaPid") instanceof Number java)||java.longValue()!=ProcessHandle.current().pid()||!(s.get("daemonPid") instanceof Number daemon)||daemon.longValue()!=parent||
+        if(!LauncherStatus.supported(s)||!System.getProperty("mcc.launcher.run-id","").equals(s.get("runId"))||
+            !LauncherStatus.pidEquals(s.get("javaPid"),ProcessHandle.current().pid())||!LauncherStatus.pidEquals(s.get("daemonPid"),parent)||
             !ProcessHandle.of(parent).map(ProcessHandle::isAlive).orElse(false)||!"running".equals(s.get("state"))||!Boolean.TRUE.equals(s.get("paperReady"))||!Boolean.TRUE.equals(s.get("dashboardReady")))throw new IOException("MCC launcher run identity is unavailable");
         if(!"26.3".equals(s.get("minecraftVersion"))||!Set.of("paper","purpur","mcccore").contains(String.valueOf(s.get("kernelName")).toLowerCase(Locale.ROOT)))throw new IOException("MCC Core currently supports Paper/Purpur 26.3 only");
         return s;
@@ -176,7 +180,7 @@ public final class MccCoreInstaller {
         if(Files.size(foundation)!=CoreBootstrap.ENGINE_BYTES||!CoreBootstrap.sha(foundation).equals(CoreBootstrap.ENGINE_SHA))throw new IOException("MCC Core engine failed pinned size/SHA-256 verification");
         try(JarFile jar=new JarFile(foundation.toFile())){CoreBootstrap.engineMetadata(jar);}
     }
-    private static void extractFoundation(Path root,Path plugin,Path output,BooleanSupplier authority)throws Exception {
+    static void extractFoundation(Path root,Path plugin,Path output,BooleanSupplier authority)throws Exception {
         permit(authority);checkPath(root,plugin,false);checkPath(root,output.getParent(),true);foundationResourceAvailable(plugin);
         Path temporary=output.resolveSibling(".engine-extract-"+UUID.randomUUID()+".tmp");
         try {
@@ -191,10 +195,10 @@ public final class MccCoreInstaller {
             try(FileChannel c=FileChannel.open(temporary,StandardOpenOption.WRITE)){c.force(true);}Files.move(temporary,output,StandardCopyOption.ATOMIC_MOVE);
         }finally{Files.deleteIfExists(temporary);}
     }
-    private static void verifyOffline(Path root)throws Exception {
+    static void verifyOffline(Path root)throws Exception {
         Path status=root.resolve(".mcc-launcher/status.json");checkPath(root,status,false);Map<String,Object> s=boundedJson(status);long parent=ProcessHandle.current().parent().map(ProcessHandle::pid).orElse(-1L);
-        if(!(s.get("protocolVersion") instanceof Number version)||version.intValue()!=2||!"prelaunch".equals(s.get("state"))||!"running".equals(s.get("profileHook"))||
-            s.get("javaPid")!=null||!(s.get("daemonPid") instanceof Number daemon)||daemon.longValue()!=parent||!ProcessHandle.of(parent).map(ProcessHandle::isAlive).orElse(false))throw new IOException("MCC Core installation requires the owned supervisor's offline prelaunch lease");
+        if(!LauncherStatus.supported(s)||!"prelaunch".equals(s.get("state"))||!"running".equals(s.get("profileHook"))||
+            s.get("javaPid")!=null||!LauncherStatus.pidEquals(s.get("daemonPid"),parent)||!ProcessHandle.of(parent).map(ProcessHandle::isAlive).orElse(false))throw new IOException("MCC Core installation requires the owned supervisor's offline prelaunch lease");
         Path daemonLock=root.resolve(".mcc-launcher/daemon.lock");checkPath(root,daemonLock,false);
         try(FileChannel c=FileChannel.open(daemonLock,StandardOpenOption.WRITE,LinkOption.NOFOLLOW_LINKS);FileLock guard=c.tryLock(0,1,false)){if(guard!=null)throw new IOException("The supervisor's retained daemon lease is absent");}
     }
@@ -209,9 +213,9 @@ public final class MccCoreInstaller {
         if(Files.exists(p,LinkOption.NOFOLLOW_LINKS)&&(!p.toRealPath().equals(p)||(directory?!Files.isDirectory(p,LinkOption.NOFOLLOW_LINKS):!Files.isRegularFile(p,LinkOption.NOFOLLOW_LINKS))))throw new IOException("Unsafe MCC Core file type");
         if(!directory&&!Files.isRegularFile(p,LinkOption.NOFOLLOW_LINKS))throw new IOException("Required MCC Core artifact is absent");
     }
-    private static Path privateDirectory(Path root,Path directory)throws IOException {checkPath(root,directory,true);Files.createDirectories(directory);PrivateFiles.restrict(directory,true);return directory;}
-    private static void copyNew(Path root,Path source,Path target)throws IOException {checkPath(root,source,false);checkPath(root,target.getParent(),true);if(Files.exists(target,LinkOption.NOFOLLOW_LINKS))throw new IOException("MCC Core copy target already exists");try(InputStream in=Files.newInputStream(source,LinkOption.NOFOLLOW_LINKS);OutputStream out=Files.newOutputStream(target,StandardOpenOption.CREATE_NEW,StandardOpenOption.WRITE,LinkOption.NOFOLLOW_LINKS)){transfer(in,out,MAX_ARTIFACT);}PrivateFiles.restrict(target,false);try(FileChannel channel=FileChannel.open(target,StandardOpenOption.WRITE)){channel.force(true);}}
-    private static void atomic(Path root,Path target,byte[] bytes)throws IOException {checkPath(root,target.getParent(),true);if(Files.isSymbolicLink(target))throw new IOException("Unsafe MCC Core metadata target");Path temporary=target.resolveSibling("."+target.getFileName()+"."+UUID.randomUUID()+".tmp");try{Files.write(temporary,bytes,StandardOpenOption.CREATE_NEW,StandardOpenOption.WRITE);PrivateFiles.restrict(temporary,false);try(FileChannel c=FileChannel.open(temporary,StandardOpenOption.WRITE)){c.force(true);}Files.move(temporary,target,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);}finally{Files.deleteIfExists(temporary);}}
+    static Path privateDirectory(Path root,Path directory)throws IOException {checkPath(root,directory,true);Files.createDirectories(directory);PrivateFiles.restrict(directory,true);return directory;}
+    static void copyNew(Path root,Path source,Path target)throws IOException {checkPath(root,source,false);checkPath(root,target.getParent(),true);if(Files.exists(target,LinkOption.NOFOLLOW_LINKS))throw new IOException("MCC Core copy target already exists");try(InputStream in=Files.newInputStream(source,LinkOption.NOFOLLOW_LINKS);OutputStream out=Files.newOutputStream(target,StandardOpenOption.CREATE_NEW,StandardOpenOption.WRITE,LinkOption.NOFOLLOW_LINKS)){transfer(in,out,MAX_ARTIFACT);}PrivateFiles.restrict(target,false);try(FileChannel channel=FileChannel.open(target,StandardOpenOption.WRITE)){channel.force(true);}}
+    static void atomic(Path root,Path target,byte[] bytes)throws IOException {checkPath(root,target.getParent(),true);if(Files.isSymbolicLink(target))throw new IOException("Unsafe MCC Core metadata target");Path temporary=target.resolveSibling("."+target.getFileName()+"."+UUID.randomUUID()+".tmp");try{Files.write(temporary,bytes,StandardOpenOption.CREATE_NEW,StandardOpenOption.WRITE);PrivateFiles.restrict(temporary,false);try(FileChannel c=FileChannel.open(temporary,StandardOpenOption.WRITE)){c.force(true);}Files.move(temporary,target,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);}finally{Files.deleteIfExists(temporary);}}
     /** Reproducible packaging of local verified inputs only; does not replace a server, change a world or start a JVM. */
     public static void main(String[] args){
         try {
